@@ -1,0 +1,119 @@
+/*!
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
+  Set of tabs with associated content that display vertically on large resolutions
+  and change to an accordion on smaller resolutions.
+
+  <div class="vertical-tabs"> // container
+    <div class="vertical-tabs__tabs">
+      <a class="vetical-tabs__tab">
+        // Tab
+      </a>
+    </div>
+
+    <div class="vertical-tabs__panel">
+      <a class="vertical-tabs__tab vertical-tabs__tab--mobile">
+        // Duplicate Tab to show on smaller screens
+      </a>
+      <div class="vertical-tabs__content">
+        // Tab content
+      </div>
+    </div>
+  </div>
+*/
+
+.vertical-tabs {
+  @include clearfix;
+  margin: $spacing-unit 0;
+
+  @media only screen and (max-width: $tablet) {
+    margin: 0;
+  }
+
+  &__tabs {
+    @include span-columns(3);
+    padding-left: 1px;
+
+    @media only screen and (max-width: $tablet) {
+      display: none;
+    }
+  }
+
+  &__tab {
+    display: block;
+    padding: $spacing-unit / 2;
+    cursor: pointer;
+
+    &:hover,
+    &:focus {
+      text-decoration: none;
+      color: darken($primary-color, 10)
+    }
+
+    &--mobile {
+      display: none;
+      @media only screen and (max-width: $tablet) {
+        display: block;
+        border-top: 1px solid $border-color;
+
+        &:last-of-type {
+          border-bottom: 1px solid $border-color;
+        }
+      }
+    }
+
+    &--no-top-border {
+      @media only screen and (max-width: $tablet) {
+        border-top: 0;
+      }
+    }
+
+    &--is-active,
+    &--is-active:hover {
+      background: $primary-color;
+      color: $white;
+      border-color: transparent;
+    }
+
+    &--condensed {
+      padding-top: $spacing-unit / 4;
+      padding-bottom: $spacing-unit / 4;
+    }
+
+    &--with-icon {
+      i {
+        width: 20px;
+        text-align: center;
+        margin-right: 5px;
+      }
+    }
+  }
+
+  &__panel {
+    @include span-columns(9);
+
+    @media only screen and (max-width: $tablet) {
+      width: 100%;
+    }
+  }
+
+  &__content {
+    padding-left: $spacing-unit;
+
+    @media only screen and (max-width: $tablet) {
+      padding: 25px 10px 10px 10px;
+    }
+  }
+}

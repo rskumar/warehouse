@@ -1,27 +1,129 @@
-db:
-  image: postgres:9.4
+version: '3'
 
-redis:
-  image: redis:latest
+volumes:
+  packages:
 
-camo:
-  build: dev/camo
-  command: node server.js
-  ports:
-    - "9000:9000"
-  environment:
-    PORT: 9000
-    CAMO_KEY: "insecure camo key"
+services:
+  db:
+    image: postgres:10.1
+    ports:
+      # 5432 may already in use by another PostgreSQL on host
+      - "5433:5432"
 
-web:
-  build: .
-  command: python -m warehouse --config dev/config.yml serve -b 0.0.0.0 -w 1 --reload
-  ports:
-    - "80:8000"
-  volumes:
-    - .:/app/
-  links:
-    - db
-    - redis
-  environment:
-    PYTHONUNBUFFERED: 1
+  redis:
+    image: redis:4.0
+
+  localstack:
+    image: localstack/localstack:0.8.7
+    environment:
+      SERVICES: "sqs"
+      HOSTNAME: "localstack"
+      HOSTNAME_EXTERNAL: "localstack"
+      DEFAULT_REGION: "us-east-2"
+    ports:
+      - "4576:4576"
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:6.2.4
+
+  camo:
+    image: pypa/warehouse-camo:latest
+    ports:
+      - "9000:9000"
+    environment:
+      CAMO_KEY: "insecurecamokey"
+
+  web:
+    build:
+      context: .
+      args:
+        DEVEL: "yes"
+        IPYTHON: "no"
+        # Uncomment the line below and add the private repo URL if you're
+        # working on pypi-theme, this is a private repository due to the fact
+        # that other people's IP is contained in it.
+        #THEME_REPO:
+    command: hupper -m gunicorn.app.wsgiapp -b 0.0.0.0:8000 -c gunicorn.conf warehouse.wsgi:application
+    env_file: dev/environment
+    volumes:
+      # We specify all of these directories instead of just . because we want to
+      # avoid having ./node_modules from the host OS being shared with the docker
+      # container, and since there's no way to exclude a directory, the only way
+      # to make this work is to share multiple, smaller directories. These cover
+      # the important things that we want to share, but changes to requirements
+      # or any file not in these directories will require a rebuild.
+      # The :z option fixes permission issues with SELinux by setting a
+      # permissive security context.
+      - ./dev:/opt/warehouse/src/dev:z
+      - ./docs:/opt/warehouse/src/docs:z
+      - ./warehouse:/opt/warehouse/src/warehouse:z
+      - ./tests:/opt/warehouse/src/tests:z
+      - ./htmlcov:/opt/warehouse/src/htmlcov:z
+      - .coveragerc:/opt/warehouse/src/.coveragerc:z
+      - packages:/var/opt/warehouse/packages
+    ports:
+      - "80:8000"
+    links:
+      - db
+      - redis
+      - localstack
+      - elasticsearch
+      - notdatadog
+
+  files:
+    build:
+      context: .
+    working_dir: /var/opt/warehouse
+    command: python -m http.server 9001
+    volumes:
+      - packages:/var/opt/warehouse/packages
+    ports:
+      - "9001:9001"
+
+  worker:
+    build:
+      context: .
+      args:
+        DEVEL: "yes"
+    command: hupper -m celery -A warehouse worker -B -S redbeat.RedBeatScheduler -l info
+    volumes:
+      - ./warehouse:/opt/warehouse/src/warehouse:z
+    env_file: dev/environment
+    environment:
+      C_FORCE_ROOT: "1"
+    links:
+      - db
+      - redis
+      - localstack
+      - elasticsearch
+      - smtp
+      - notdatadog
+
+  static:
+    build:
+      context: .
+      dockerfile: Dockerfile.static
+    command: bash -c "node --trace-warnings `which gulp` watch"
+    volumes:
+      - ./warehouse:/opt/warehouse/src/warehouse:z
+      - ./Gulpfile.babel.js:/opt/warehouse/src/Gulpfile.babel.js:z
+      - ./.babelrc:/opt/warehouse/src/.babelrc:z
+      - ./.sass-lint.yml:/opt/warehouse/src/.sass-lint.yml:z
+
+  smtp:
+    build:
+      context: .
+    command: python /opt/warehouse/dev/smtp.py 0.0.0.0:2525
+    ports:
+      - "2525:2525"
+    volumes:
+      - ./dev/smtp.py:/opt/warehouse/dev/smtp.py
+
+  notdatadog:
+    build:
+      context: .
+    command: python /opt/warehouse/dev/notdatadog.py 0.0.0.0:8125
+    ports:
+      - "8125:8125/udp"
+    volumes:
+      - ./dev/notdatadog.py:/opt/warehouse/dev/notdatadog.py

@@ -10,390 +10,115 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import itertools
 import pretend
 import pytest
 
-from pyramid.config.views import DefaultViewMapper
 from pyramid.httpexceptions import HTTPMethodNotAllowed
-from pyramid.interfaces import IViewMapperFactory
+from pyramid.viewderivers import INGRESS, csrf_view
 
 from warehouse import csrf
 
 
-class TestDecorators:
+class TestRequireMethodView:
+    def test_passes_through_on_falsey(self):
+        view = pretend.stub()
+        info = pretend.stub(options={"require_methods": False})
 
-    def test_csrf_exempt(self):
+        assert csrf.require_method_view(view, info) is view
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS"])
+    def test_allows_safe_by_default(self, method):
+        response = pretend.stub()
+
         @pretend.call_recorder
         def view(context, request):
-            pass
+            return response
+
+        info = pretend.stub(options={})
+        wrapped_view = csrf.require_method_view(view, info)
 
         context = pretend.stub()
-        request = pretend.stub()
-
-        wrapped = csrf.csrf_exempt(view)
-        wrapped(context, request)
-
-        assert view.calls == [pretend.call(context, request)]
-        assert not request._process_csrf
-
-    def test_unscoped_csrf_protect(self):
-        @pretend.call_recorder
-        def view(context, request):
-            pass
-
-        context = pretend.stub()
-        request = pretend.stub()
-
-        wrapped = csrf.csrf_protect(view)
-        wrapped(context, request)
-
-        assert view.calls == [pretend.call(context, request)]
-        assert request._process_csrf
-        assert request._csrf_scope is None
-
-    def test_scoped_csrf_protect(self):
-        @pretend.call_recorder
-        def view(context, request):
-            pass
-
-        context = pretend.stub()
-        request = pretend.stub()
-
-        wrapped = csrf.csrf_protect("my scope")(view)
-        wrapped(context, request)
-
-        assert view.calls == [pretend.call(context, request)]
-        assert request._process_csrf
-        assert request._csrf_scope is "my scope"
-
-
-class TestCheckCSRF:
-
-    @pytest.mark.parametrize("method", ["GET", "HEAD", "OPTIONS", "TRACE"])
-    def test_safe_method(self, method):
         request = pretend.stub(method=method)
-        csrf._check_csrf(request)
+
+        assert wrapped_view(context, request) is response
+        assert view.calls == [pretend.call(context, request)]
 
     @pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
-    def test_unsafe_method_no_process(self, method):
+    def test_disallows_unsafe_by_default(self, method):
+        @pretend.call_recorder
+        def view(context, request):
+            pass
+
+        info = pretend.stub(options={})
+        wrapped_view = csrf.require_method_view(view, info)
+
+        context = pretend.stub()
         request = pretend.stub(method=method)
+
         with pytest.raises(HTTPMethodNotAllowed):
-            csrf._check_csrf(request)
+            wrapped_view(context, request)
 
-        request = pretend.stub(method=method)
-        request._process_csrf = None
+        assert view.calls == []
+
+    def test_allows_passing_other_methods(self):
+        response = pretend.stub()
+
+        @pretend.call_recorder
+        def view(context, request):
+            return response
+
+        info = pretend.stub(options={"require_methods": ["POST"]})
+        wrapped_view = csrf.require_method_view(view, info)
+
+        context = pretend.stub()
+        request = pretend.stub(method="POST")
+
+        assert wrapped_view(context, request) is response
+        assert view.calls == [pretend.call(context, request)]
+
+    def test_allows_exception_views_by_default(self):
+        response = pretend.stub()
+
+        @pretend.call_recorder
+        def view(context, request):
+            return response
+
+        info = pretend.stub(options={})
+        wrapped_view = csrf.require_method_view(view, info)
+
+        context = pretend.stub()
+        request = pretend.stub(method="POST", exception=pretend.stub())
+
+        assert wrapped_view(context, request) is response
+        assert view.calls == [pretend.call(context, request)]
+
+    def test_explicit_controls_exception_views(self):
+        @pretend.call_recorder
+        def view(context, request):
+            pass
+
+        info = pretend.stub(options={"require_methods": ["POST"]})
+        wrapped_view = csrf.require_method_view(view, info)
+
+        context = pretend.stub()
+        request = pretend.stub(method="GET")
+
         with pytest.raises(HTTPMethodNotAllowed):
-            csrf._check_csrf(request)
+            wrapped_view(context, request)
 
-    @pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
-    def test_unsafe_method_https_no_origin(self, method):
-        request = pretend.stub(headers={}, method=method, scheme="https")
-        request._process_csrf = True
-
-        with pytest.raises(csrf.InvalidCSRF) as exc:
-            csrf._check_csrf(request)
-
-        assert exc.value.args[0] == csrf.REASON_NO_ORIGIN
-
-    @pytest.mark.parametrize(
-        ("method", "headers"),
-        itertools.product(
-            ["POST", "PUT", "DELETE"],
-            [
-                {"Origin": "null"},
-                {"Origin": "https://o.example.com"},
-                {"Referer": "https://r.example.com"},
-                {
-                    "Origin": "https://o.example.com",
-                    "Referer": "https://r.example.com",
-                },
-            ],
-        ),
-    )
-    def test_unsafe_method_https_origin_invalid(self, method, headers):
-        request = pretend.stub(
-            headers=headers,
-            method=method,
-            scheme="https",
-            host_url="https://a.example.com/",
-        )
-        request._process_csrf = True
-
-        with pytest.raises(csrf.InvalidCSRF) as exc:
-            csrf._check_csrf(request)
-
-        origin = request.headers.get("Origin", request.headers.get("Referer"))
-
-        assert exc.value.args[0] == csrf.REASON_BAD_ORIGIN.format(
-            origin,
-            request.host_url,
-        )
-
-    @pytest.mark.parametrize(
-        ("method", "headers", "post", "scheme", "scope"),
-        itertools.product(
-            ["POST", "PUT", "DELETE"],
-            [
-                {"Origin": "https://a.example.com"},
-                {"Referer": "https://a.example.com"},
-                {
-                    "Origin": "https://a.example.com",
-                    "Referer": "https://r.example.com",
-                },
-                {"Origin": "https://a.example.com", "CSRFToken": "wrong"},
-                {"Referer": "https://a.example.com", "CSRFToken": "wrong"},
-                {
-                    "Origin": "https://a.example.com",
-                    "Referer": "https://r.example.com",
-                    "CSRFToken": "wrong",
-                },
-            ],
-            [{}, {"csrf_token": "invalid"}],
-            ["http", "https"],
-            [None, "my scope"]
-        ),
-    )
-    def test_unsafe_method_wrong_token(self, method, headers, post, scheme,
-                                       scope):
-        request = pretend.stub(
-            headers=headers,
-            method=method,
-            scheme=scheme,
-            host_url="https://a.example.com/",
-            session=pretend.stub(
-                get_scoped_csrf_token=pretend.call_recorder(
-                    lambda scope: "123456"
-                ),
-                get_csrf_token=pretend.call_recorder(lambda: "123456"),
-            ),
-            POST=post,
-        )
-        request._process_csrf = True
-        request._csrf_scope = scope
-
-        with pytest.raises(csrf.InvalidCSRF) as exc:
-            csrf._check_csrf(request)
-
-        assert exc.value.args[0] == csrf.REASON_BAD_TOKEN
-
-        if scope is not None:
-            assert request.session.get_scoped_csrf_token.calls == [
-                pretend.call(scope),
-            ]
-            assert request.session.get_csrf_token.calls == []
-        else:
-            assert request.session.get_csrf_token.calls == [pretend.call()]
-            assert request.session.get_scoped_csrf_token.calls == []
-
-    @pytest.mark.parametrize(
-        ("method", "headers", "scheme", "scope"),
-        itertools.product(
-            ["POST", "PUT", "DELETE"],
-            [
-                {"Origin": "https://a.example.com"},
-                {"Referer": "https://a.example.com"},
-                {
-                    "Origin": "https://a.example.com",
-                    "Referer": "https://r.example.com",
-                },
-                {"Origin": "https://a.example.com", "CSRFToken": "wrong"},
-                {"Referer": "https://a.example.com", "CSRFToken": "wrong"},
-                {
-                    "Origin": "https://a.example.com",
-                    "Referer": "https://r.example.com",
-                    "CSRFToken": "wrong",
-                },
-            ],
-            ["http", "https"],
-            [None, "my scope"]
-        ),
-    )
-    def test_unsafe_method_via_post(self, method, headers, scheme, scope):
-        request = pretend.stub(
-            headers=headers,
-            method=method,
-            scheme=scheme,
-            host_url="https://a.example.com/",
-            session=pretend.stub(
-                get_scoped_csrf_token=pretend.call_recorder(
-                    lambda scope: "123456"
-                ),
-                get_csrf_token=pretend.call_recorder(lambda: "123456"),
-            ),
-            POST={"csrf_token": "123456"},
-        )
-        request._process_csrf = True
-        request._csrf_scope = scope
-
-        csrf._check_csrf(request)
-
-        if scope is not None:
-            assert request.session.get_scoped_csrf_token.calls == [
-                pretend.call(scope),
-            ]
-            assert request.session.get_csrf_token.calls == []
-        else:
-            assert request.session.get_csrf_token.calls == [pretend.call()]
-            assert request.session.get_scoped_csrf_token.calls == []
-
-    @pytest.mark.parametrize(
-        ("method", "headers", "scheme", "scope"),
-        itertools.product(
-            ["POST", "PUT", "DELETE"],
-            [
-                {"Origin": "https://a.example.com"},
-                {"Referer": "https://a.example.com"},
-                {
-                    "Origin": "https://a.example.com",
-                    "Referer": "https://r.example.com",
-                },
-                {"Origin": "https://a.example.com"},
-                {"Referer": "https://a.example.com"},
-                {
-                    "Origin": "https://a.example.com",
-                    "Referer": "https://r.example.com",
-                },
-            ],
-            ["http", "https"],
-            [None, "my scope"]
-        ),
-    )
-    def test_unsafe_method_via_header(self, method, headers, scheme, scope):
-        headers.update({"CSRFToken": "123456"})
-        request = pretend.stub(
-            headers=headers,
-            method=method,
-            scheme=scheme,
-            host_url="https://a.example.com/",
-            session=pretend.stub(
-                get_scoped_csrf_token=pretend.call_recorder(
-                    lambda scope: "123456"
-                ),
-                get_csrf_token=pretend.call_recorder(lambda: "123456"),
-            ),
-            POST={},
-        )
-        request._process_csrf = True
-        request._csrf_scope = scope
-
-        csrf._check_csrf(request)
-
-        if scope is not None:
-            assert request.session.get_scoped_csrf_token.calls == [
-                pretend.call(scope),
-            ]
-            assert request.session.get_csrf_token.calls == []
-        else:
-            assert request.session.get_csrf_token.calls == [pretend.call()]
-            assert request.session.get_scoped_csrf_token.calls == []
+        assert view.calls == []
 
 
-class TestCSRFMapperFactory:
-
-    def test_exempt_view(self, monkeypatch):
-        def raiser(*args, **kwargs):
-            assert False, "This method should not be called"
-        monkeypatch.setattr(csrf, "_check_csrf", raiser)
-
-        class FakeMapper:
-            def __call__(self, view):
-                return view
-
-        mapper = csrf.csrf_mapper_factory(FakeMapper)()
-
-        @pretend.call_recorder
-        def view(context, request):
-            pass
-
-        context = pretend.stub()
-        request = pretend.stub(_process_csrf=False)
-
-        wrapped = mapper(view)
-        wrapped(context, request)
-
-        assert view.calls == [pretend.call(context, request)]
-
-    def test_non_csrf_view(self, monkeypatch):
-        checker = pretend.call_recorder(lambda request: None)
-        monkeypatch.setattr(csrf, "_check_csrf", checker)
-
-        class FakeMapper:
-            def __call__(self, view):
-                return view
-
-        mapper = csrf.csrf_mapper_factory(FakeMapper)()
-
-        @pretend.call_recorder
-        def view(context, request):
-            pass
-
-        context = pretend.stub()
-        request = pretend.stub()
-
-        wrapped = mapper(view)
-        wrapped(context, request)
-
-        assert checker.calls == [pretend.call(request)]
-        assert view.calls == [pretend.call(context, request)]
-
-    def test_csrf_protected_view(self, monkeypatch, pyramid_request):
-        checker = pretend.call_recorder(lambda request: None)
-        monkeypatch.setattr(csrf, "_check_csrf", checker)
-
-        class FakeMapper:
-            def __call__(self, view):
-                return view
-
-        mapper = csrf.csrf_mapper_factory(FakeMapper)()
-
-        @pretend.call_recorder
-        def view(context, request):
-            pass
-
-        context = pretend.stub()
-        request = pyramid_request
-        request._process_csrf = True
-
-        wrapped = mapper(view)
-        wrapped(context, request)
-
-        assert checker.calls == [pretend.call(request)]
-        assert view.calls == [pretend.call(context, request)]
-        assert len(request.response_callbacks) == 1
-
-        response = pretend.stub(vary=[])
-        request.response_callbacks[0](request, response)
-        assert response.vary == {"Cookie"}
-
-
-@pytest.mark.parametrize("mapper", [None, True])
-def test_includeme(mapper, monkeypatch):
-    if mapper:
-        class Mapper:
-            pass
-
-        mapper = Mapper
-
-    mapper_cls = pretend.stub()
-    csrf_mapper_factory = pretend.call_recorder(lambda m: mapper_cls)
-    monkeypatch.setattr(csrf, "csrf_mapper_factory", csrf_mapper_factory)
-
+def test_includeme():
     config = pretend.stub(
-        commit=pretend.call_recorder(lambda: None),
-        registry=pretend.stub(
-            queryUtility=pretend.call_recorder(lambda x: mapper),
-        ),
-        set_view_mapper=pretend.call_recorder(lambda m: None)
+        set_default_csrf_options=pretend.call_recorder(lambda **kw: None),
+        add_view_deriver=pretend.call_recorder(lambda *args, **kw: None),
     )
 
     csrf.includeme(config)
 
-    assert config.commit.calls == [pretend.call()]
-    assert config.registry.queryUtility.calls == [
-        pretend.call(IViewMapperFactory),
+    assert config.set_default_csrf_options.calls == [pretend.call(require_csrf=True)]
+    assert config.add_view_deriver.calls == [
+        pretend.call(csrf_view, under=INGRESS, over="secured_view"),
+        pretend.call(csrf.require_method_view, under=INGRESS, over="csrf_view"),
     ]
-    assert csrf_mapper_factory.calls == [
-        pretend.call(mapper if mapper is not None else DefaultViewMapper),
-    ]
-    assert config.set_view_mapper.calls == [pretend.call(mapper_cls)]

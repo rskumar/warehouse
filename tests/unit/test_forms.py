@@ -13,7 +13,73 @@
 import pretend
 import pytest
 
-from warehouse.forms import Form, DBForm, StopValidation
+from wtforms.validators import StopValidation, ValidationError
+
+from warehouse.forms import Form, DBForm, URIValidator, PasswordStrengthValidator
+
+
+class TestURIValidator:
+    @pytest.mark.parametrize(
+        "uri",
+        [
+            "https://example.com/",
+            "http://example.com/",
+            "https://sub.example.com/path?query#thing",
+        ],
+    )
+    def test_valid(self, uri):
+        URIValidator()(pretend.stub(), pretend.stub(data=uri))
+
+    @pytest.mark.parametrize(
+        "uri", ["javascript:alert(0)", "UNKNOWN", "ftp://example.com/"]
+    )
+    def test_invalid(self, uri):
+        validator = URIValidator()
+        with pytest.raises(ValidationError):
+            validator(pretend.stub(), pretend.stub(data=uri))
+
+    def test_plain_schemes(self):
+        validator = URIValidator(require_scheme=True, allowed_schemes=[])
+        validator(pretend.stub(), pretend.stub(data="ftp://example.com/"))
+
+
+class TestPasswordStrengthValidator:
+    def test_invalid_fields(self):
+        validator = PasswordStrengthValidator(user_input_fields=["foo"])
+        with pytest.raises(ValidationError) as exc:
+            validator({}, pretend.stub())
+        assert str(exc.value) == "Invalid field name: 'foo'"
+
+    @pytest.mark.parametrize("password", ["this is a great password!"])
+    def test_good_passwords(self, password):
+        validator = PasswordStrengthValidator()
+        validator(pretend.stub(), pretend.stub(data=password))
+
+    @pytest.mark.parametrize(
+        ("password", "expected"),
+        [
+            (
+                "qwerty",
+                (
+                    "This is a top-10 common password. Add another word or two. "
+                    "Uncommon words are better."
+                ),
+            ),
+            (
+                "bombo!b",
+                (
+                    "Password is too easily guessed. Add another word or two. "
+                    "Uncommon words are better."
+                ),
+            ),
+            ("bombo!b asdadad", "Password is too easily guessed."),
+        ],
+    )
+    def test_invalid_password(self, password, expected):
+        validator = PasswordStrengthValidator(required_strength=5)
+        with pytest.raises(ValidationError) as exc:
+            validator(pretend.stub(), pretend.stub(data=password))
+        assert str(exc.value) == expected
 
 
 def _raiser(exc):
@@ -21,7 +87,6 @@ def _raiser(exc):
 
 
 class TestForm:
-
     def test_empty_form_no_errors(self):
         form = Form()
         assert form.errors == {}
@@ -67,13 +132,7 @@ class TestForm:
         assert form.errors == {"__all__": ["A Value Error"]}
         assert form.full_validate.calls == [pretend.call(form)]
 
-    @pytest.mark.parametrize(
-        "validator_funcs",
-        [
-            [],
-            [lambda f: None]
-        ],
-    )
+    @pytest.mark.parametrize("validator_funcs", [[], [lambda f: None]])
     def test_form_level_validation_meta_works(self, validator_funcs):
         validator_funcs = [pretend.call_recorder(v) for v in validator_funcs]
 
@@ -115,8 +174,9 @@ class TestForm:
             ),
         ],
     )
-    def test_form_level_validation_meta_fails(self, validator_funcs, errors,
-                                              stop_after):
+    def test_form_level_validation_meta_fails(
+        self, validator_funcs, errors, stop_after
+    ):
         validator_funcs = [pretend.call_recorder(v) for v in validator_funcs]
 
         class TestForm(Form):
@@ -134,7 +194,6 @@ class TestForm:
 
 
 class TestDBForm:
-
     def test_form_requires_db(self):
         with pytest.raises(TypeError):
             DBForm()

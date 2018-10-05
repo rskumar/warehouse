@@ -10,36 +10,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import json
 
-from pyramid.path import AssetResolver
+from pyramid.static import ManifestCacheBuster as _ManifestCacheBuster
 
 
-class WarehouseCacheBuster:
+class ManifestCacheBuster(_ManifestCacheBuster):
+    def __init__(self, *args, strict=True, **kwargs):
+        super().__init__(*args, **kwargs)
 
-    def __init__(self, manifest, cache=True):
-        self.manifest_asset = manifest
-        self.cache = cache
+        self.strict = strict
 
-    def _load_manifest(self):
-        manifest = getattr(self, "_manifest", None)
+    def __call__(self, request, subpath, kw):
+        try:
+            return self.manifest[subpath], kw
+        except KeyError:
+            # If we're not in strict mode, then we'll allow missing files to
+            # just fall back to the un-cachebusted path.
+            if not self.strict:
+                return subpath, kw
 
-        if manifest is None:
-            manifest = AssetResolver().resolve(self.manifest_asset)
-            with manifest.stream() as fp:
-                manifest = json.loads(fp.read().decode("utf8"))
-
-            if self.cache:
-                self._manifest = manifest
-
-        return manifest
-
-    def pregenerate(self, pathspec, subpath, kw):
-        path = "/".join(subpath)
-
-        # Attempt to look our path up in our manifest file, if it does not
-        # exist then we'll just return the original path.
-        manifest = self._load_manifest()
-        path = manifest.get(path, path)
-
-        return tuple(path.split("/")), kw
+            # We raise an error here even though the one from Pyramid does not.
+            # This is done because we want to be strict that all static files
+            # must be cache busted otherwise it is likely an error of some kind
+            # and should be remedied and without a loud error it's unlikely to
+            # be noticed.
+            raise ValueError(
+                "{} is not able to be cache busted.".format(subpath)
+            ) from None

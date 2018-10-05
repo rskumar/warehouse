@@ -11,17 +11,17 @@
 # limitations under the License.
 
 import logging.config
+import threading
 import uuid
 
 import structlog
-import structlog.stdlib
 
+request_logger = structlog.get_logger("warehouse.request")
 
 RENDERER = structlog.processors.JSONRenderer()
 
 
 class StructlogFormatter(logging.Formatter):
-
     def format(self, record):
         # TODO: Figure out a better way of handling this besides just looking
         #       at the logger name, ideally this would have some way to
@@ -35,6 +35,7 @@ class StructlogFormatter(logging.Formatter):
                 "logger": record.name,
                 "level": record.levelname,
                 "event": record.msg,
+                "thread": threading.get_ident(),
             }
             record.msg = RENDERER(None, None, event_dict)
 
@@ -46,37 +47,38 @@ def _create_id(request):
 
 
 def _create_logger(request):
-    logger = structlog.get_logger("warehouse.request")
-
     # This has to use **{} instead of just a kwarg because request.id is not
     # an allowed kwarg name.
-    logger = logger.bind(**{"request.id": request.id})
-
-    return logger
+    return request_logger.bind(**{"request.id": request.id})
 
 
 def includeme(config):
     # Configure the standard library logging
-    logging.config.dictConfig({
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "structlog": {
-                "()": "warehouse.logging.StructlogFormatter",
+    logging.config.dictConfig(
+        {
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {"structlog": {"()": "warehouse.logging.StructlogFormatter"}},
+            "handlers": {
+                "primary": {
+                    "class": "logging.StreamHandler",
+                    "stream": "ext://sys.stdout",
+                    "formatter": "structlog",
+                },
+                "sentry": {
+                    "class": "raven.handlers.logging.SentryHandler",
+                    "level": "ERROR",
+                    "dsn": config.registry.settings.get("sentry.dsn"),
+                    "release": config.registry.settings.get("warehouse.commit"),
+                    "transport": config.registry.settings.get("sentry.transport"),
+                },
             },
-        },
-        "handlers": {
-            "primary": {
-                "class": "logging.StreamHandler",
-                "stream": "ext://sys.stdout",
-                "formatter": "structlog",
+            "root": {
+                "level": config.registry.settings.get("logging.level", "INFO"),
+                "handlers": ["primary", "sentry"],
             },
-        },
-        "root": {
-            "level": config.registry.settings.get("logging.level", "INFO"),
-            "handlers": ["primary"],
-        },
-    })
+        }
+    )
 
     # Configure structlog
     structlog.configure(
@@ -91,9 +93,10 @@ def includeme(config):
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
     )
 
-    # Give every request a unique identifer
+    # Give every request a unique identifier
     config.add_request_method(_create_id, name="id", reify=True)
 
     # Add a log method to every request.

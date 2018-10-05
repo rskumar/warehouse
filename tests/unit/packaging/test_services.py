@@ -11,108 +11,25 @@
 # limitations under the License.
 
 import io
+import os.path
 
 import boto3.session
 import botocore.exceptions
-import freezegun
 import pretend
 import pytest
-import redis
 
 from zope.interface.verify import verifyClass
 
-from warehouse.packaging.interfaces import IDownloadStatService, IFileStorage
+from warehouse.packaging.interfaces import IFileStorage, IDocsStorage
 from warehouse.packaging.services import (
-    RedisDownloadStatService, LocalFileStorage, S3FileStorage,
+    LocalFileStorage,
+    S3FileStorage,
+    LocalDocsStorage,
+    S3DocsStorage,
 )
 
 
-@freezegun.freeze_time("2012-01-14")
-class TestRedisDownloadStatService:
-
-    def test_verify_service(self):
-        assert verifyClass(IDownloadStatService, RedisDownloadStatService)
-
-    def test_creates_redis(self, monkeypatch):
-        redis_obj = pretend.stub()
-        redis_cls = pretend.stub(
-            from_url=pretend.call_recorder(lambda u: redis_obj),
-        )
-        monkeypatch.setattr(redis, "StrictRedis", redis_cls)
-
-        url = pretend.stub()
-        svc = RedisDownloadStatService(url)
-
-        assert svc.redis is redis_obj
-        assert redis_cls.from_url.calls == [pretend.call(url)]
-
-    @pytest.mark.parametrize(
-        ("keys", "result"),
-        [
-            ([], 0),
-            ([5, 7, 8], 20),
-        ]
-    )
-    def test_get_daily_stats(self, keys, result):
-        svc = RedisDownloadStatService("")
-        svc.redis = pretend.stub(mget=pretend.call_recorder(lambda *a: keys))
-
-        call_keys = (
-            ["downloads:hour:12-01-14-00:foo"] +
-            [
-                "downloads:hour:12-01-13-{:02d}:foo".format(i)
-                for i in reversed(range(24))
-            ] +
-            ["downloads:hour:12-01-12-23:foo"]
-        )
-
-        assert svc.get_daily_stats("foo") == result
-        assert svc.redis.mget.calls == [pretend.call(*call_keys)]
-
-    @pytest.mark.parametrize(
-        ("keys", "result"),
-        [
-            ([], 0),
-            ([5, 7, 8], 20),
-        ]
-    )
-    def test_get_weekly_stats(self, keys, result):
-        svc = RedisDownloadStatService("")
-        svc.redis = pretend.stub(mget=pretend.call_recorder(lambda *a: keys))
-
-        call_keys = [
-            "downloads:daily:12-01-{:02d}:foo".format(i + 7)
-            for i in reversed(range(8))
-        ]
-
-        assert svc.get_weekly_stats("foo") == result
-        assert svc.redis.mget.calls == [pretend.call(*call_keys)]
-
-    @pytest.mark.parametrize(
-        ("keys", "result"),
-        [
-            ([], 0),
-            ([5, 7, 8], 20),
-        ]
-    )
-    def test_get_monthly_stats(self, keys, result):
-        svc = RedisDownloadStatService("")
-        svc.redis = pretend.stub(mget=pretend.call_recorder(lambda *a: keys))
-
-        call_keys = [
-            "downloads:daily:12-01-{:02d}:foo".format(i)
-            for i in reversed(range(1, 15))
-        ] + [
-            "downloads:daily:11-12-{:02d}:foo".format(i + 15)
-            for i in reversed(range(17))
-        ]
-
-        assert svc.get_monthly_stats("foo") == result
-        assert svc.redis.mget.calls == [pretend.call(*call_keys)]
-
-
 class TestLocalFileStorage:
-
     def test_verify_service(self):
         assert verifyClass(IFileStorage, LocalFileStorage)
 
@@ -122,9 +39,7 @@ class TestLocalFileStorage:
 
     def test_create_service(self):
         request = pretend.stub(
-            registry=pretend.stub(
-                settings={"files.path": "/the/one/two/"},
-            ),
+            registry=pretend.stub(settings={"files.path": "/the/one/two/"})
         )
         storage = LocalFileStorage.create_service(None, request)
         assert storage.base == "/the/one/two/"
@@ -142,9 +57,84 @@ class TestLocalFileStorage:
         with pytest.raises(FileNotFoundError):
             storage.get("file.txt")
 
+    def test_stores_file(self, tmpdir):
+        filename = str(tmpdir.join("testfile.txt"))
+        with open(filename, "wb") as fp:
+            fp.write(b"Test File!")
+
+        storage_dir = str(tmpdir.join("storage"))
+        storage = LocalFileStorage(storage_dir)
+        storage.store("foo/bar.txt", filename)
+
+        with open(os.path.join(storage_dir, "foo/bar.txt"), "rb") as fp:
+            assert fp.read() == b"Test File!"
+
+    def test_stores_two_files(self, tmpdir):
+        filename1 = str(tmpdir.join("testfile1.txt"))
+        with open(filename1, "wb") as fp:
+            fp.write(b"First Test File!")
+
+        filename2 = str(tmpdir.join("testfile2.txt"))
+        with open(filename2, "wb") as fp:
+            fp.write(b"Second Test File!")
+
+        storage_dir = str(tmpdir.join("storage"))
+        storage = LocalFileStorage(storage_dir)
+        storage.store("foo/first.txt", filename1)
+        storage.store("foo/second.txt", filename2)
+
+        with open(os.path.join(storage_dir, "foo/first.txt"), "rb") as fp:
+            assert fp.read() == b"First Test File!"
+
+        with open(os.path.join(storage_dir, "foo/second.txt"), "rb") as fp:
+            assert fp.read() == b"Second Test File!"
+
+
+class TestLocalDocsStorage:
+    def test_verify_service(self):
+        assert verifyClass(IDocsStorage, LocalDocsStorage)
+
+    def test_create_service(self):
+        request = pretend.stub(
+            registry=pretend.stub(settings={"docs.path": "/the/one/two/"})
+        )
+        storage = LocalDocsStorage.create_service(None, request)
+        assert storage.base == "/the/one/two/"
+
+    def test_delete_by_prefix(self, tmpdir):
+        storage_dir = str(tmpdir.join("storage"))
+        os.makedirs(os.path.join(storage_dir, "foo"), exist_ok=True)
+        os.makedirs(os.path.join(storage_dir, "bar"), exist_ok=True)
+
+        filename0 = str(tmpdir.join("storage/foo/testfile0.txt"))
+        with open(filename0, "wb") as fp:
+            fp.write(b"Zeroth Test File!")
+
+        filename1 = str(tmpdir.join("storage/foo/testfile1.txt"))
+        with open(filename1, "wb") as fp:
+            fp.write(b"First Test File!")
+
+        filename2 = str(tmpdir.join("storage/bar/testfile2.txt"))
+        with open(filename2, "wb") as fp:
+            fp.write(b"Second Test File!")
+
+        storage = LocalDocsStorage(storage_dir)
+        storage.remove_by_prefix("foo")
+
+        assert not os.path.exists(os.path.join(storage_dir, "foo"))
+
+        with open(os.path.join(storage_dir, "bar/testfile2.txt"), "rb") as fp:
+            assert fp.read() == b"Second Test File!"
+
+    def test_delete_already_gone(self, tmpdir):
+        storage_dir = str(tmpdir.join("storage"))
+        storage = LocalDocsStorage(storage_dir)
+
+        response = storage.remove_by_prefix("foo")
+        assert response is None
+
 
 class TestS3FileStorage:
-
     def test_verify_service(self):
         assert verifyClass(IFileStorage, S3FileStorage)
 
@@ -177,8 +167,7 @@ class TestS3FileStorage:
     def test_raises_when_key_non_existant(self):
         def raiser():
             raise botocore.exceptions.ClientError(
-                {"Error": {"Code": "NoSuchKey", "Message": "No Key!"}},
-                "some operation",
+                {"Error": {"Code": "NoSuchKey", "Message": "No Key!"}}, "some operation"
             )
 
         s3key = pretend.stub(get=raiser)
@@ -198,8 +187,179 @@ class TestS3FileStorage:
             )
 
         s3key = pretend.stub(get=raiser)
-        bucket = pretend.stub(Object=lambda path: s3key)
+        bucket = pretend.stub(Object=pretend.call_recorder(lambda path: s3key))
         storage = S3FileStorage(bucket)
 
         with pytest.raises(botocore.exceptions.ClientError):
             storage.get("file.txt")
+
+    def test_stores_file(self, tmpdir):
+        filename = str(tmpdir.join("testfile.txt"))
+        with open(filename, "wb") as fp:
+            fp.write(b"Test File!")
+
+        bucket = pretend.stub(
+            upload_file=pretend.call_recorder(lambda filename, key, ExtraArgs: None)
+        )
+        storage = S3FileStorage(bucket)
+        storage.store("foo/bar.txt", filename)
+
+        assert bucket.upload_file.calls == [
+            pretend.call(filename, "foo/bar.txt", ExtraArgs={})
+        ]
+
+    def test_stores_two_files(self, tmpdir):
+        filename1 = str(tmpdir.join("testfile1.txt"))
+        with open(filename1, "wb") as fp:
+            fp.write(b"First Test File!")
+
+        filename2 = str(tmpdir.join("testfile2.txt"))
+        with open(filename2, "wb") as fp:
+            fp.write(b"Second Test File!")
+
+        bucket = pretend.stub(
+            upload_file=pretend.call_recorder(lambda filename, key, ExtraArgs: None)
+        )
+        storage = S3FileStorage(bucket)
+        storage.store("foo/first.txt", filename1)
+        storage.store("foo/second.txt", filename2)
+
+        assert bucket.upload_file.calls == [
+            pretend.call(filename1, "foo/first.txt", ExtraArgs={}),
+            pretend.call(filename2, "foo/second.txt", ExtraArgs={}),
+        ]
+
+    def test_stores_metadata(self, tmpdir):
+        filename = str(tmpdir.join("testfile.txt"))
+        with open(filename, "wb") as fp:
+            fp.write(b"Test File!")
+
+        bucket = pretend.stub(
+            upload_file=pretend.call_recorder(lambda filename, key, ExtraArgs: None)
+        )
+        storage = S3FileStorage(bucket)
+        storage.store("foo/bar.txt", filename, meta={"foo": "bar"})
+
+        assert bucket.upload_file.calls == [
+            pretend.call(
+                filename, "foo/bar.txt", ExtraArgs={"Metadata": {"foo": "bar"}}
+            )
+        ]
+
+    def test_hashed_path_with_prefix(self):
+        s3key = pretend.stub(get=lambda: {"Body": io.BytesIO(b"my contents")})
+        bucket = pretend.stub(Object=pretend.call_recorder(lambda path: s3key))
+        storage = S3FileStorage(bucket, prefix="packages/")
+
+        file_object = storage.get("ab/file.txt")
+
+        assert file_object.read() == b"my contents"
+        assert bucket.Object.calls == [pretend.call("packages/ab/file.txt")]
+
+    def test_hashed_path_without_prefix(self):
+        s3key = pretend.stub(get=lambda: {"Body": io.BytesIO(b"my contents")})
+        bucket = pretend.stub(Object=pretend.call_recorder(lambda path: s3key))
+        storage = S3FileStorage(bucket)
+
+        file_object = storage.get("ab/file.txt")
+
+        assert file_object.read() == b"my contents"
+        assert bucket.Object.calls == [pretend.call("ab/file.txt")]
+
+
+class TestS3DocsStorage:
+    def test_verify_service(self):
+        assert verifyClass(IDocsStorage, S3DocsStorage)
+
+    def test_create_service(self):
+        session = boto3.session.Session()
+        request = pretend.stub(
+            find_service=pretend.call_recorder(lambda name: session),
+            registry=pretend.stub(settings={"docs.bucket": "froblob"}),
+        )
+        storage = S3DocsStorage.create_service(None, request)
+
+        assert request.find_service.calls == [pretend.call(name="aws.session")]
+        assert storage.bucket_name == "froblob"
+
+    @pytest.mark.parametrize("file_count", [66, 100])
+    def test_delete_by_prefix(self, file_count):
+        files = {"Contents": [{"Key": f"foo/{i}.html"} for i in range(file_count)]}
+        s3_client = pretend.stub(
+            list_objects_v2=pretend.call_recorder(
+                lambda Bucket=None, Prefix=None: files
+            ),
+            delete_objects=pretend.call_recorder(lambda Bucket=None, Delete=None: None),
+        )
+        storage = S3DocsStorage(s3_client, "bucket-name")
+
+        storage.remove_by_prefix("foo")
+
+        assert s3_client.list_objects_v2.calls == [
+            pretend.call(Bucket="bucket-name", Prefix="foo")
+        ]
+
+        assert s3_client.delete_objects.calls == [
+            pretend.call(
+                Bucket="bucket-name",
+                Delete={
+                    "Objects": [{"Key": f"foo/{i}.html"} for i in range(file_count)]
+                },
+            )
+        ]
+
+    def test_delete_by_prefix_more_files(self):
+        files = {"Contents": [{"Key": f"foo/{i}.html"} for i in range(150)]}
+        s3_client = pretend.stub(
+            list_objects_v2=pretend.call_recorder(
+                lambda Bucket=None, Prefix=None: files
+            ),
+            delete_objects=pretend.call_recorder(lambda Bucket=None, Delete=None: None),
+        )
+        storage = S3DocsStorage(s3_client, "bucket-name")
+
+        storage.remove_by_prefix("foo")
+
+        assert s3_client.list_objects_v2.calls == [
+            pretend.call(Bucket="bucket-name", Prefix="foo")
+        ]
+
+        assert s3_client.delete_objects.calls == [
+            pretend.call(
+                Bucket="bucket-name",
+                Delete={"Objects": [{"Key": f"foo/{i}.html"} for i in range(100)]},
+            ),
+            pretend.call(
+                Bucket="bucket-name",
+                Delete={"Objects": [{"Key": f"foo/{i}.html"} for i in range(100, 150)]},
+            ),
+        ]
+
+    def test_delete_by_prefix_with_storage_prefix(self):
+        files = {"Contents": [{"Key": f"docs/foo/{i}.html"} for i in range(150)]}
+        s3_client = pretend.stub(
+            list_objects_v2=pretend.call_recorder(
+                lambda Bucket=None, Prefix=None: files
+            ),
+            delete_objects=pretend.call_recorder(lambda Bucket=None, Delete=None: None),
+        )
+        storage = S3DocsStorage(s3_client, "bucket-name", prefix="docs")
+
+        storage.remove_by_prefix("foo")
+
+        assert s3_client.list_objects_v2.calls == [
+            pretend.call(Bucket="bucket-name", Prefix="docs/foo")
+        ]
+
+        assert s3_client.delete_objects.calls == [
+            pretend.call(
+                Bucket="bucket-name",
+                Delete={"Objects": [{"Key": f"docs/foo/{i}.html"} for i in range(100)]},
+            ),
+            pretend.call(
+                Bucket="bucket-name",
+                Delete={
+                    "Objects": [{"Key": f"docs/foo/{i}.html"} for i in range(100, 150)]
+                },
+            ),
+        ]

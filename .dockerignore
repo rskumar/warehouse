@@ -1,5 +1,6 @@
 .git/*
-.tox/*
-
-dev/example.sql
-dev/example.sql.xz
+node_modules
+dev/*
+**/*.pyc
+htmlcov
+warehouse/static/dist

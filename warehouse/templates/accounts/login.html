@@ -1,29 +1,87 @@
+{#
+ # Licensed under the Apache License, Version 2.0 (the "License");
+ # you may not use this file except in compliance with the License.
+ # You may obtain a copy of the License at
+ #
+ # http://www.apache.org/licenses/LICENSE-2.0
+ #
+ # Unless required by applicable law or agreed to in writing, software
+ # distributed under the License is distributed on an "AS IS" BASIS,
+ # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+-#}
 {% extends "base.html" %}
 
-{% block title %}{{ _('Sign in') }}{% endblock %}
+{% block title %}Log in{% endblock %}
 
 {% block content %}
-  <form method="POST" action="{{ request.current_route_path() }}">
-    <input name="csrf_token" type="hidden" value="{{ request.session.get_scoped_csrf_token('accounts.login') }}">
+  {% if testPyPI %}
+    {% set title = "TestPyPI" %}
+  {% else %}
+    {% set title = "PyPI" %}
+  {% endif %}
 
-    {% if redirect.data %}
-    <input name="{{ redirect.field }}" type="hidden" value="{{ redirect.data }}">
-    {% endif %}
+  <section class="horizontal-section">
+    <div class="site-container">
+      <h1 class="page-title">Log in to {{ title }}</h1>
 
-    {% if form.errors.__all__ %}
-    <ul class="errors">{% for error in form.errors.__all__ %}<li>{{ error }}</li>{% endfor %}</ul>
-    {% endif %}
+      <form method="POST" action="{{ request.current_route_path() }}">
+        <input name="csrf_token" type="hidden" value="{{ request.session.get_csrf_token() }}">
 
-    {% if form.username.errors %}
-    <ul class="errors">{% for error in form.username.errors %}<li>{{ error }}</li>{% endfor %}</ul>
-    {% endif %}
-    {{ form.username(placeholder="Username") }}
+        {% if redirect.data %}
+        <input name="{{ redirect.field }}" type="hidden" value="{{ redirect.data }}">
+        {% endif %}
 
-    {% if form.password.errors %}
-    <ul class="errors">{% for error in form.password.errors %}<li>{{ error }}</li>{% endfor %}</ul>
-    {% endif %}
-    {{ form.password(placeholder="Password") }}
+        {% if form.errors.__all__ %}
+        <ul class="form-errors">
+          {% for error in form.errors.__all__ %}
+          <li>{{ error }}</li>
+          {% endfor %}
+        </ul>
+        {% endif %}
 
-    <input type="submit" value="Login">
-  </form>
+        <div class="form-group">
+          <label for="username" class="form-group__label">Username</label>
+          {{ form.username(placeholder="Your username", autocorrect="off", autocapitalize="off", autocomplete="username", spellcheck="false", required="required", class_="form-group__input", tabindex="1", autofocus=true) }}
+          {% if form.username.errors %}
+          <ul class="form-errors">
+            {% for error in form.username.errors %}
+            <li>{{ error }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+
+        <div data-controller="password" class="form-group">
+          <div class="split-layout">
+            <label for="password" class="form-group__label">Password</label>
+            <label for="show-password">
+              <input data-action="change->password#togglePasswords" data-target="password.showPassword"
+                id="show-password" type="checkbox" tabindex="4">&nbsp;Show password
+            </label>
+          </div>
+          {{ form.password(placeholder="Your password", required="required", class_="form-group__input", autocomplete="current-password", tabindex="2", data_target="password.password") }}
+          {% if form.password.errors %}
+          <ul class="form-errors">
+            {% for error in form.password.errors %}
+            <li>{{ error }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+
+        <div class="form-group">
+          <div class="split-layout split-layout--table">
+            <div>
+              <input type="submit" value="Log in" class="button button--primary" tabindex="3">
+            </div>
+            <span>
+              <a href="{{request.route_url('accounts.request-password-reset')}}" tabindex="5">Forgot password?</a>
+            </span>
+          </div>
+        </div>
+      </form>
+    </div>
+  </section>
 {% endblock %}

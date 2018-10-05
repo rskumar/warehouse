@@ -13,17 +13,17 @@
 import pretend
 import pytest
 
-from pyramid.tweens import EXCVIEW
-
 from warehouse.cache.http import (
-    add_vary, cache_control, conditional_http_tween_factory, includeme,
+    add_vary,
+    cache_control,
+    conditional_http_tween_factory,
+    includeme,
 )
 
 
 @pytest.mark.parametrize("vary", [None, [], ["wat"]])
 def test_add_vary(vary):
     class FakeRequest:
-
         def __init__(self):
             self.callbacks = []
 
@@ -49,10 +49,9 @@ def test_add_vary(vary):
 
 
 class TestCacheControl:
-
     def test_cache_public(self):
         response_obj = pretend.stub(
-            cache_control=pretend.stub(public=None, max_age=None),
+            cache_control=pretend.stub(public=None, max_age=None)
         )
         request_obj = pretend.stub(registry=pretend.stub(settings={}))
         context_obj = pretend.stub()
@@ -71,7 +70,7 @@ class TestCacheControl:
 
     def test_cache_private(self):
         response_obj = pretend.stub(
-            cache_control=pretend.stub(private=None, max_age=None),
+            cache_control=pretend.stub(private=None, max_age=None)
         )
         request_obj = pretend.stub(registry=pretend.stub(settings={}))
         context_obj = pretend.stub()
@@ -91,10 +90,8 @@ class TestCacheControl:
     def test_no_cache(self):
         response_obj = pretend.stub(
             cache_control=pretend.stub(
-                no_cache=None,
-                no_store=None,
-                must_revalidate=None,
-            ),
+                no_cache=None, no_store=None, must_revalidate=None
+            )
         )
         request_obj = pretend.stub(registry=pretend.stub(settings={}))
         context_obj = pretend.stub()
@@ -115,9 +112,7 @@ class TestCacheControl:
     def test_bypass_cache(self):
         response_obj = pretend.stub()
         request_obj = pretend.stub(
-            registry=pretend.stub(
-                settings={"pyramid.prevent_http_cache": True},
-            ),
+            registry=pretend.stub(settings={"pyramid.prevent_http_cache": True})
         )
         context_obj = pretend.stub()
 
@@ -133,16 +128,17 @@ class TestCacheControl:
 
 
 class TestConditionalHTTPTween:
-
     def test_has_last_modified(self):
         response = pretend.stub(
             last_modified=pretend.stub(),
+            status_code=200,
             etag=None,
             conditional_response=False,
             app_iter=iter([b"foo"]),
+            content_length=None,
         )
         handler = pretend.call_recorder(lambda request: response)
-        request = pretend.stub()
+        request = pretend.stub(method="GET")
 
         tween = conditional_http_tween_factory(handler, pretend.stub())
 
@@ -155,6 +151,7 @@ class TestConditionalHTTPTween:
             last_modified=None,
             etag="foo",
             conditional_response=False,
+            app_iter=iter([b"foo"]),
         )
         handler = pretend.call_recorder(lambda request: response)
         request = pretend.stub()
@@ -173,6 +170,28 @@ class TestConditionalHTTPTween:
             conditional_response=False,
             md5_etag=pretend.call_recorder(lambda: None),
             app_iter=[b"foo"],
+            status_code=200,
+        )
+        handler = pretend.call_recorder(lambda request: response)
+        request = pretend.stub(method=method)
+
+        tween = conditional_http_tween_factory(handler, pretend.stub())
+
+        assert tween(request) is response
+        assert handler.calls == [pretend.call(request)]
+        assert response.conditional_response
+        assert response.md5_etag.calls == [pretend.call()]
+
+    @pytest.mark.parametrize("method", ["GET", "HEAD"])
+    def test_implicit_etag_buffers_streaming(self, method):
+        response = pretend.stub(
+            last_modified=None,
+            etag=None,
+            conditional_response=False,
+            md5_etag=pretend.call_recorder(lambda: None),
+            app_iter=iter([b"foo"]),
+            body=b"foo",
+            content_length=3,
             status_code=200,
         )
         handler = pretend.call_recorder(lambda request: response)
@@ -227,13 +246,15 @@ class TestConditionalHTTPTween:
 
     def test_no_etag(self):
         response = pretend.stub(
+            status_code=200,
             last_modified=None,
             etag=None,
             conditional_response=False,
             app_iter=iter([b"foo"]),
+            content_length=None,
         )
         handler = pretend.call_recorder(lambda request: response)
-        request = pretend.stub()
+        request = pretend.stub(method="GET")
 
         tween = conditional_http_tween_factory(handler, pretend.stub())
 
@@ -243,14 +264,9 @@ class TestConditionalHTTPTween:
 
 
 def test_includeme():
-    config = pretend.stub(
-        add_tween=pretend.call_recorder(lambda t, under: None),
-    )
+    config = pretend.stub(add_tween=pretend.call_recorder(lambda t: None))
     includeme(config)
 
     assert config.add_tween.calls == [
-        pretend.call(
-            "warehouse.cache.http.conditional_http_tween_factory",
-            under=EXCVIEW,
-        ),
+        pretend.call("warehouse.cache.http.conditional_http_tween_factory")
     ]

@@ -10,55 +10,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pretend
 import pytest
 
-from warehouse.utils import static
+from warehouse.utils.static import ManifestCacheBuster
 
 
-class TestWarehouseCacheBuster:
+class TestManifestCacheBuster:
+    def test_returns_when_valid(self):
+        cb = ManifestCacheBuster("warehouse:static/dist/manifest.json")
+        cb._manifest = {"/the/path/style.css": "/the/busted/path/style.css"}
+        result = cb(None, "/the/path/style.css", {"keyword": "arg"})
 
-    def test_accepts_manifest_asset(self):
-        cachebuster = static.WarehouseCacheBuster("foo")
-        assert cachebuster.manifest_asset == "foo"
+        assert result == ("/the/busted/path/style.css", {"keyword": "arg"})
 
-    @pytest.mark.parametrize("cache", [True, False])
-    def test_load_manifest(self, monkeypatch, cache):
-        class FakeStream:
-            def __enter__(self):
-                return self
+    def test_raises_when_invalid(self):
+        cb = ManifestCacheBuster("warehouse:static/dist/manifest.json")
+        cb._manifest = {}
 
-            def __exit__(self, *args, **kwargs):
-                pass
+        with pytest.raises(ValueError):
+            cb(None, "/the/path/style.css", {"keyword": "arg"})
 
-            def read(self):
-                return b'{"css/style.css": "css/style-foo.css"}'
+    def test_returns_when_invalid_and_not_strict(self):
+        cb = ManifestCacheBuster("warehouse:static/dist/manifest.json", strict=False)
+        cb._manifest = {}
+        result = cb(None, "/the/path/style.css", {"keyword": "arg"})
 
-        class FakeAsset:
-            def stream(self):
-                return FakeStream()
-
-        assetresolver_obj = pretend.stub(resolve=lambda spec: FakeAsset())
-        assetresolver_cls = pretend.call_recorder(lambda: assetresolver_obj)
-        monkeypatch.setattr(static, "AssetResolver", assetresolver_cls)
-
-        cachebuster = static.WarehouseCacheBuster("foo", cache=cache)
-        manifest = cachebuster._load_manifest()
-        manifest = cachebuster._load_manifest()
-
-        assert manifest == {"css/style.css": "css/style-foo.css"}
-
-        if cache:
-            assert assetresolver_cls.calls == [pretend.call()]
-        else:
-            assert assetresolver_cls.calls == [pretend.call(), pretend.call()]
-
-    def test_pregenerate(self):
-        def load_manifest():
-            return {"css/style.css": "css/style-pre.css"}
-
-        cachebuster = static.WarehouseCacheBuster("pregenerate")
-        cachebuster._load_manifest = load_manifest
-
-        r = cachebuster.pregenerate(None, ("css", "style.css"), {"foo": "bar"})
-        assert r == (("css", "style-pre.css"), {"foo": "bar"})
+        assert result == ("/the/path/style.css", {"keyword": "arg"})

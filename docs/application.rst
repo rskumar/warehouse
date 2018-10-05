@@ -1,80 +1,150 @@
-Application Structure
-=====================
+Warehouse codebase
+==================
 
-Note: this is a brain dump and its contents may be moved to a more
-appropriate location eventually.
+Warehouse uses the
+`Pyramid`_ web framework, the
+`SQLAlchemy <https://docs.sqlalchemy.org/en/latest/>`__ ORM, and
+`Postgres <https://www.postgresql.org/docs/>`__ for its database.
+Warehouse's front end uses `Jinja2 <http://jinja.pocoo.org/>`__ templates.
 
-At the moment it *just* lists the legacy structure and none of the intended
-new structure.
+The production deployment for Warehouse is in progress and currently
+does not use any containers, although we may change that in the
+future. In the development environment, we use several `Docker`_  containers, and use `Docker Compose <https://docs.docker.com/compose/overview/>`__ to `manage <https://github.com/pypa/warehouse/blob/master/docker-compose.yml#L3>`__
+running the containers and the connections between them. In the future
+we will probably reduce that number to two containers, one of which
+contains static files for the website, and the other which contains
+the Python web application code running in a virtual environment and
+the database.
 
-The following documents the current URLs in the legacy PyPI application.
+Since Warehouse was built on top of an existing database (for legacy
+PyPI) and developers had to fit our ORM to the existing tables, some
+of the code in the ORM may not look like code from the SQLAlchemy
+documentation. There are some places where joins are done using
+name-based logic instead of a foreign key (but this may change in the
+future).
 
-============= =================================================================
-URL           Purpose
-------------- -----------------------------------------------------------------
-/             Redirect to /pypi
-/pypi         Legacy PyPI application. See below.
-/daytime      Legacy mirroring support
-/security     Page giving contact and other information regarding site security
-/id           OpenID endpoint
-/oauth        OAuth endpoint
-/simple       Simple API as given in :doc:`api-reference/legacy`
-/packages     Serve up a package file
-/mirrors      Page listing legacy mirrors (not to be retained)
-/serversig    Legacy mirroring support (no-one uses it: not to be retained)
-/raw-packages nginx implementation specific hackery (entirely internal; not to
-              be retained)
-/stats        Web stats. Whatever. Probably dead.
-/local-stats  Package download stats. All the legacy mirrors have this.
-/static       Static files (CSS, images) in support of the web interface.
-============= =================================================================
+Warehouse also uses `hybrid URL traversal and dispatch`_. Using
+factory classes, resources are provided directly to the views based on the URL
+pattern. This method of handling URLs may be unfamiliar to developers used to
+other web frameworks, such as Django or Flask. `This article`_ has a helpful
+discussion of the differences between URL dispatch and traversal in Pyramid.
 
-The legacy application has a bunch of different behaviours:
+Usage assumptions and concepts
+------------------------------
 
-1. With no additional path, parameter or content-type information the app
-   renders a "front page" for the site. TODO: keep this behaviour or redirect?
-2. With a content-type of "text/xml" the app runs in an XML-RPC server mode.
-3. With certain path information the app will render project information.
-4. With an :action parameter the app will take certain actions and/or display
-   certain information.
+See `PyPI help <https://pypi.org/help/#packages>`_ and the glossary
+section of :doc:`ui-principles` to understand projects, releases,
+packages, maintainers, authors, and owners.
 
-The :action parameters are typically submitted through GET URL parameters,
-though some actions are also POST actions.
+Warehouse is specifically the codebase for the official Python Package
+Index, and thus focuses on architecture and features for PyPI and Test
+PyPI. People and groups who want to run their own package indexes
+usually use other tools, like `devpi
+<https://pypi.org/project/devpi-server/>`_.
 
-**could be nuked without fuss**
-  - `display` was used to display a package version but was replaced ages ago
-    by the /<package>/<version> URL structure
-  - all the user-based stuff like `register_form`, `user`, `user_form`,
-    `forgotten_password_form`, `login`, `logout`, `forgotten_password`,
-    `password_reset`, `pw_reset` and `pw_reset_change` will most likely be
-    replaced by newer mechanisms in warehouse
-  - `openid_endpoint`, `openid_decide_post` could also be replaced by something
-    saner
-  - `home` is the old home page thing and completely unnecessary
-  - `index` is just stupid given the number of packages
-  - `browse` and `search` are *probably* only referenced by internal links so
-    should be safe to nuke
-  - `submit_pkg_info` and `display_pkginfo` probably aren't used
-  - `submit_form` and `pkg_edit` will be changing anyway
-  - `files`, `urls`, `role`, `role_form` are old style and will be changing
-  - `list_classifiers` .. this might actually only be used by Richard :)
-  - `claim`, `openid`, `openid_return`, `dropid` are legacy openid login
-    support and will be changing
-  - `clear_auth` yeah, lol ("clears" Basic Auth)
-  - `addkey`, `delkey` will be changing if we even keep supporting ssh submit
-  - `verify` probably isn't actually used by anyone
-  - `lasthour` is a pubsubhubbub thing - does this even exist any longer?
-  - `json` is never used as a :action invocation, only ever /<package>/json
-  - `gae_file` I'm pretty sure this is not necessary
-  - `rss_regen` manually regens the RSS cached files, not needed
-  - `about` can die
-  - `delete_user` yes, you can die too
-  - `exception` heh
+Warehouse serves three main classes of users:
 
-**will need to retain**
-  - `rss` and `packages_rss` will be in a bunch of peoples` RSS readers
-  - `doap` is most likely referred to
-  - `show_md5` ?
+1. *People who are not logged in.* This accounts for the majority of
+   browser traffic and all API download traffic.
+2. *Owners/maintainers of one or more projects.* This accounts for
+   almost all writes. A user must create and use a PyPI account to
+   maintain or own a project, and there is no particular functionality
+   available to a logged-in user other than to manage projects they
+   own/maintain. As of March 2018, PyPI had about 270,000 users, and
+   Test PyPI had about 30,000 users.
+3. *PyPI application administrators*, e.g., Ernest W. Durbin III,
+   Dustin Ingram, and Donald Stufft, who add classifiers, ban
+   spam/malware projects, help users with account recovery, and so
+   on. There are under ten such admins.
 
-**can be deprecated carefully**
-  - `submit`, `upload`, `doc_upload`, `file_upload`,
+Since reads are *much* more common than writes (much more goes out than
+goes in), we try to cache as much as possible. This is a big reason
+that, although we have supported localization in the past, `we currently
+don't <https://github.com/pypa/warehouse/issues/1453>`__.
+
+File and directory structure
+----------------------------
+
+The top-level directory of the Warehouse repo contains files including:
+
+-  ``LICENSE``
+-  ``CONTRIBUTING.rst`` (the contribution guide)
+-  ``README.rst``
+-  ``requirements.txt`` for the Warehouse virtual environment
+-  ``Dockerfile``: creates the Docker containers that Warehouse runs in
+-  ``docker-compose.yml`` file configures Docker Compose
+-  ``setup.cfg`` for test configuration
+-  ``Makefile``: commands to spin up Docker Compose and the Docker
+   containers, run the linter and other tests, etc.
+-  files associated with Warehouse's front end, e.g.,
+   ``Gulpfile.babel.js``
+
+Directories within the repository:
+
+- `bin/ <https://github.com/pypa/warehouse/tree/master/bin>`_ - high-level scripts for Docker, Travis, and Makefile commands
+- `dev/ <https://github.com/pypa/warehouse/tree/master/dev>`_ - assets for developer environment
+- `tests/ <https://github.com/pypa/warehouse/tree/master/tests>`_ - tests
+- `warehouse/ <https://github.com/pypa/warehouse/tree/master/warehouse>`_ - code in modules
+
+  - `legacy/ <https://github.com/pypa/warehouse/tree/master/warehouse/legacy>`_ - most of the read-only APIs implemented here
+  - `forklift/ <https://github.com/pypa/warehouse/tree/master/warehouse/forklift>`_ - :ref:`upload-api-forklift`
+  - `accounts/ <https://github.com/pypa/warehouse/tree/master/warehouse/accounts>`_ - user accounts
+  - `admin/ <https://github.com/pypa/warehouse/tree/master/warehouse/admin>`_ - application-administrator-specific
+  - `cache/ <https://github.com/pypa/warehouse/tree/master/warehouse/cache>`_ - caching
+  - `classifiers/ <https://github.com/pypa/warehouse/tree/master/warehouse/classifiers>`_ - frame trove classifiers
+  - `cli/ <https://github.com/pypa/warehouse/tree/master/warehouse/cli>`_ - entry scripts and
+    `the interactive shell <https://warehouse.readthedocs.io/development/getting-started/#running-the-interactive-shell>`_
+  - `i18n/ <https://github.com/pypa/warehouse/tree/master/warehouse/i18n>`_ - internationalization
+  - `locales/ <https://github.com/pypa/warehouse/tree/master/warehouse/locales>`_ - internationalization
+  - `manage/ <https://github.com/pypa/warehouse/tree/master/warehouse/manage>`_ - logged-in user functionality (i.e., manage account &
+    owned/maintained projects)
+  - `migrations/ <https://github.com/pypa/warehouse/tree/master/warehouse/migrations>`_ - changes to the database schema
+  - `packaging/ <https://github.com/pypa/warehouse/tree/master/warehouse/packaging>`_ - models
+  - `rate_limiting/ <https://github.com/pypa/warehouse/tree/master/warehouse/rate_limiting>`_ - rate limiting to prevent abuse
+  - `rss/ <https://github.com/pypa/warehouse/tree/master/warehouse/rss>`_ - RSS feeds: :doc:`api-reference/feeds`
+  - `sitemap/ <https://github.com/pypa/warehouse/tree/master/warehouse/sitemap>`_ - site maps
+  - `utils/ <https://github.com/pypa/warehouse/tree/master/warehouse/utils>`_ - various utilities Warehouse uses
+
+.. _Pyramid: https://docs.pylonsproject.org/projects/pyramid/en/latest/index.html
+.. _Docker: https://docs.docker.com/
+.. _hybrid URL traversal and dispatch: https://docs.pylonsproject.org/projects/pyramid/en/latest/narr/hybrid.html
+.. _This article: https://docs.pylonsproject.org/projects/pyramid/en/latest/narr/muchadoabouttraversal.html
+
+Historical context & deprecations
+---------------------------------
+
+For the history of Python packaging and distribution, see `the PyPA history
+page <https://www.pypa.io/en/latest/history/>`_.
+
+From the early 2000s till April 2018, `the legacy PyPI codebase
+<https://github.com/pypa/pypi-legacy>`_, not Warehouse, powered
+PyPI. Warehouse deliberately does not provide some features that users
+may be used to from the legacy site, such as:
+
+- "hidden releases"
+
+- uploading to pythonhosted.com documentation hosting (`discussion and
+  plans <https://github.com/pypa/warehouse/issues/582>`_)
+
+- `download counts visible in the API <https://warehouse.readthedocs.io/api-reference/xml-rpc/#changes-to-legacy-api>`_:
+  instead, use `the Google BigQuery service <https://packaging.python.org/guides/analyzing-pypi-package-downloads/>`_)
+
+- key management: PyPI no longer has a UI for users to manage GPG or
+  SSH public keys
+
+- uploading new releases via the web UI: instead, maintainers should
+  use the command-line tool `Twine <http://twine.readthedocs.io/>`_
+
+- updating release descriptions via the web UI: instead, to update
+  release metadata, you need to upload a new release (`discussion
+  <https://mail.python.org/pipermail/distutils-sig/2017-December/031826.html>`_)
+
+- `uploading a package without first verifying an email address <https://status.python.org/incidents/mgjw1g5yjy5j>`_
+
+- `HTTP access to APIs; now it's HTTPS-only <https://mail.python.org/pipermail/distutils-sig/2017-October/031712.html>`_
+
+- GPG/PGP signatures for packages (still visible in the :doc:`../api-reference/legacy/`
+  per `PEP 503 <https://www.python.org/dev/peps/pep-0503/>`_, but no
+  longer visible in the web UI)
+
+- `OpenID and Google auth login <https://mail.python.org/pipermail/distutils-sig/2018-January/031855.html>`_

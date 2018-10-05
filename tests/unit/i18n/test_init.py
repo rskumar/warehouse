@@ -17,29 +17,12 @@ from warehouse import i18n
 
 def test_sets_locale(monkeypatch):
     locale_obj = pretend.stub()
-    locale_cls = pretend.stub(
-        parse=pretend.call_recorder(lambda l: locale_obj),
-    )
+    locale_cls = pretend.stub(parse=pretend.call_recorder(lambda l: locale_obj))
     monkeypatch.setattr(i18n, "Locale", locale_cls)
     request = pretend.stub(locale_name=pretend.stub())
 
     assert i18n._locale(request) is locale_obj
     assert locale_cls.parse.calls == [pretend.call(request.locale_name)]
-
-
-def test_loads_translations(monkeypatch):
-    translation = pretend.stub()
-    translations = pretend.stub(
-        load=pretend.call_recorder(lambda d, l, domain: translation)
-    )
-    monkeypatch.setattr(i18n, "Translations", translations)
-
-    request = pretend.stub(locale=pretend.stub())
-
-    assert i18n._translation(request) is translation
-    assert translations.load.calls == [
-        pretend.call(i18n.LOCALE_DIR, request.locale, domain="warehouse"),
-    ]
 
 
 def test_includeme():
@@ -52,14 +35,13 @@ def test_includeme():
     i18n.includeme(config)
 
     assert config.add_request_method.calls == [
-        pretend.call(i18n._locale, name="locale", reify=True),
-        pretend.call(i18n._translation, name="translation", reify=True),
+        pretend.call(i18n._locale, name="locale", reify=True)
     ]
     assert config_settings == {
         "jinja2.filters": {
             "format_date": "warehouse.i18n.filters:format_date",
-        },
-        "jinja2.finalize": i18n.translate_value,
-        "jinja2.i18n.domain": "warehouse",
-        "jinja2.i18n.gettext": i18n.JinjaRequestTranslation,
+            "format_datetime": "warehouse.i18n.filters:format_datetime",
+            "format_rfc822_datetime": "warehouse.i18n.filters:format_rfc822_datetime",
+            "format_number": "warehouse.i18n.filters:format_number",
+        }
     }

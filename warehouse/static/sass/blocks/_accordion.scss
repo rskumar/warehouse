@@ -1,0 +1,77 @@
+/*!
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+/*
+  Menu that opens and closes:
+
+  <div class="accordion">
+    <a class="accordion__link -js-expander-trigger">Trigger</a>
+    <div class="accordion__content">
+      // Content to show and hide here
+    </div>
+  </div>
+*/
+
+.accordion {
+  margin-top: 10px;
+
+  &__link {
+    padding: 5px;
+    display: block;
+    text-decoration: none;
+    cursor: pointer;
+    border: 0;
+    background-color: transparent;
+    color: $primary-color;
+
+    &:hover {
+      text-decoration: none;
+    }
+
+    &:before {
+      font-family: "Font Awesome 5 Free";
+      font-weight: 900;
+      content: "\f139";
+      margin-right: $spacing-unit / 2;
+    }
+
+    @media only screen and (max-width: $desktop) {
+      color: $white;
+    }
+
+  }
+
+  &__content {
+    padding: 10px 0;
+
+    a {
+      display: block;
+      margin-right: 10px;
+    }
+  }
+
+  &--closed {
+    .accordion__content {
+      display: none;
+    }
+
+    .accordion__link {
+      &:before {
+        font-family: "Font Awesome 5 Free";
+        font-weight: 900;
+        content: "\f13a";
+      }
+    }
+  }
+}

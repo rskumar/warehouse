@@ -1,48 +1,127 @@
+{#
+ # Licensed under the Apache License, Version 2.0 (the "License");
+ # you may not use this file except in compliance with the License.
+ # You may obtain a copy of the License at
+ #
+ # http://www.apache.org/licenses/LICENSE-2.0
+ #
+ # Unless required by applicable law or agreed to in writing, software
+ # distributed under the License is distributed on an "AS IS" BASIS,
+ # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+-#}
 {% extends "base.html" %}
 
+{% block title %}{% if testPyPI %}Test{% endif %}PyPI – the Python Package Index{% endblock %}
+
+{% macro project_snippet(release) -%}
+<li>
+  <a class="package-snippet" href="{{ request.route_path('packaging.project', name=release.project.normalized_name) }}">
+    <h3 class="package-snippet__title">
+      <span class="package-snippet__name">{{ release.project.name }}</span>
+      <span class="package-snippet__version">{{ release.version }}</span>
+    </h3>
+    <p class="package-snippet__description">{{ release.summary }}</p>
+  </a>
+</li>
+{%- endmacro %}
+
+
+{% block brand %}
+<div>
+  <a class="site-header__logo" href="{{ request.route_path('index') }}">
+    <img alt="{{ request.registry.settings['site.name'] }}" src="{{ request.static_path('warehouse:static/dist/images/logo-small.svg') }}">
+  </a>
+</div>
+{% endblock %}
+
+{% block mobile_search %}{% endblock %}
+
 {% block content %}
-<section class="index-page">
-    <header class="header">
-        <div class="flash-notice">
-            <p>{{ _('%(site_name)s is a repository of software for the Python programming language.', site_name=request.registry.settings['site.name']) }}</p>
-            <p>{{ _('For up to date best practices about packaging read <a href="%(packaging_guide_url)s">packaging.python.org</a>.', packaging_guide_url='https://packaging.python.org/en/latest/') }}</p>
-        </div>
 
-        <form class="search-bar" role="search" action="TODO" method="GET">
-          <input type="search" placeholder="{{ _('Search packages...') }}" />
-          <button type="submit">
-            <img src="{{ request.static_path('warehouse:static/images/search-icon.png') }}" alt="Search Icon">
-          </button>
-        </form>
+{% if testPyPI %}
+  {% set banner = "Test Python package publishing with the Test Python Package Index" %}
+{% else %}
+  {% set banner = "Find, install and publish Python packages with the Python Package Index" %}
+{% endif %}
 
-        <div class="stats">
-          <ul>
-            <li>{{ num_projects }}<span>{{ _('Projects') }}</span></li>
-            <li>{{ num_releases }}<span>{{ _('Releases') }}</span></li>
-            <li>{{ num_files }}<span>{{ _('Files') }}</span></li>
-            <li>{{ num_users }}<span>{{ _('Users') }}</span></li>
-          </ul>
-        </div>
-    </header>
+<section class="banner">
+  <div class="homepage-banner">
+    <h1 class="homepage-banner__title">{{ banner }}</h1>
 
-    <div class="content">
-        <h1>{{ _('Recently Released') }}</h1>
-        {% for release in latest_updated_releases %}
-        <div class="comment">
-          <div class="comment-image">
-                <img src="{{ gravatar(release.author_email, size=50) }}" alt="{{ release.author}}" height="50" width="50">
-          </div>
-          <div class="comment-content">
-            <h1><a href="{{ request.route_path('packaging.project', name=release.project.normalized_name) }}">
-                  {{ release.project.name }}</a>
-            </h1>
-            {% if release.summary %}<p>{{ release.summary }}</p>{% endif %}
-            <p class="comment-detail">
-              {{ _('<strong>%(version)s</strong> by %(author)s', version=release.version, author=release.author) }}
-            </p>
-          </div>
-        </div>
-        {% endfor %}
-    </div>
+    <form class="search-form search-form--large search-form--fullwidth" action="{{ request.route_path('search') }}">
+      <label for="search" class="sr-only">Search PyPI</label>
+      <input id="search" class="search-form__search large-input" type="text" name="q" placeholder="Search projects">
+      <button type="submit" class="search-form__button">
+        <i class="fa fa-search" aria-hidden="true"></i>
+        <span class="sr-only">Search</span>
+      </button>
+    </form>
+
+    <p class="homepage-banner__browse">Or <a href="{{ request.route_path('search') }}">browse projects</a></p>
+  </div>
 </section>
+
+<section class="horizontal-section horizontal-section--grey horizontal-section--thin horizontal-section--statistics">
+  <div class="statistics-bar">
+    <p class="statistics-bar__statistic">{{ num_projects|format_number }} projects</p>
+    <p class="statistics-bar__statistic">{{ num_releases|format_number }} releases</p>
+    <p class="statistics-bar__statistic">{{ num_files|format_number }} files</p>
+    <p class="statistics-bar__statistic">{{ num_users|format_number }} users</p>
+  </div>
+</section>
+
+<section class="horizontal-section">
+  <div class="about-pypi">
+    <div class="about-pypi__logo">
+      <img alt="{{ request.registry.settings['site.name'] }}" src="{{ request.static_path('warehouse:static/dist/images/logo-large.svg') }}">
+    </div>
+    <div class="about-pypi__text">
+      <p class="lede-paragraph">The Python Package Index (PyPI) is a repository of software for the Python programming language.</p>
+      <p>
+        PyPI helps you find and install software developed and shared by the Python community.
+        <a href="https://packaging.python.org/installing/">Learn about installing packages</a>.
+      </p>
+      <p>
+        Package authors use PyPI to distribute their software.
+        <a href="https://packaging.python.org/distributing/">Learn how to package your Python code for PyPI</a>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="horizontal-section horizontal-section--grey">
+  <div class="site-container">
+    <div class="col-half">
+      <div class="heading-wsubtitle" id="pypi-trending-packages">
+        <h2 class="heading-wsubtitle__heading">Trending projects</h2>
+        <p class="heading-wsubtitle__subtitle">Trending projects as downloaded by the community</p>
+      </div>
+      <ul class="unstyled" aria-labelledby="pypi-trending-packages">
+        {% for release in trending_projects %}
+          {{ project_snippet(release) }}
+        {% endfor %}
+      </ul>
+      {#
+      <a class="button" href="TODO">Show more</a>
+      #}
+    </div>
+    <div class="col-half">
+      <div class="heading-wsubtitle" id="pypi-new-packages">
+        <h2 class="heading-wsubtitle__heading">New releases</h2>
+        <p class="heading-wsubtitle__subtitle">Hot off the press: the newest project releases</p>
+      </div>
+      <ul class="unstyled" aria-labelledby="pypi-new-packages">
+        {% for release in latest_releases %}
+          {{ project_snippet(release) }}
+        {% endfor %}
+      </ul>
+      {#
+      <a class="button" href="TODO">Show more</a>
+      #}
+    </div>
+  </div>
+</section>
+
 {% endblock %}

@@ -11,41 +11,25 @@
 # limitations under the License.
 
 import functools
-import hmac
 import time
 
 import msgpack
 import msgpack.exceptions
 import redis
 
-from pyramid.config.views import DefaultViewMapper
-from pyramid.interfaces import ISession, ISessionFactory, IViewMapperFactory
+from pyramid import viewderivers
+from pyramid.interfaces import ISession, ISessionFactory
 from zope.interface import implementer
 
 from warehouse.cache.http import add_vary
 from warehouse.utils import crypto
 
 
-def uses_session(view):
-    @functools.wraps(view)
-    def wrapped(context, request):
-        # Mark our request as allowing access to the sessions.
-        request._allow_session = True
-
-        # Actually execute our view.
-        return view(context, request)
-
-    # Wrap our already wrapped view with another wrapper which will ensure that
-    # there is a Vary: Cookie header applied.
-    wrapped = add_vary("Cookie")(wrapped)
-
-    return wrapped
-
-
 def _invalid_method(method):
     @functools.wraps(method)
     def wrapped(self, *args, **kwargs):
         self._error_message()
+
     return wrapped
 
 
@@ -72,7 +56,7 @@ class InvalidSession(dict):
 
     def _error_message(self):
         raise RuntimeError(
-            "Cannot use request.session in a view without @uses_session."
+            "Cannot use request.session in a view without uses_session=True."
         )
 
     def __getattr__(self, name):
@@ -88,6 +72,7 @@ def _changed_method(method):
     def wrapped(self, *args, **kwargs):
         self.changed()
         return method(self, *args, **kwargs)
+
     return wrapped
 
 
@@ -183,19 +168,6 @@ class Session(dict):
             token = self.new_csrf_token()
         return token
 
-    def get_scoped_csrf_token(self, scope):
-        # Here we want to do
-        # HMAC_sha512(scope + unscoped_token, session_id). This will make it
-        # possible to have scope specific CSRF tokens which means that a single
-        # scope token being leaked cannot be used for other scopes.
-        unscoped = self.get_csrf_token().encode("utf8")
-        scope = scope.encode("utf8")
-        session_id = self.sid.encode("utf8")
-        return hmac.new(scope + unscoped, session_id, "sha512").hexdigest()
-
-    def has_csrf_token(self):
-        return self._csrf_token_key in self
-
 
 @implementer(ISessionFactory)
 class SessionFactory:
@@ -244,8 +216,7 @@ class SessionFactory:
         # De-serialize our session data
         try:
             data = msgpack.unpackb(bdata, encoding="utf8", use_list=True)
-        except (msgpack.exceptions.UnpackException,
-                msgpack.exceptions.ExtraData):
+        except (msgpack.exceptions.UnpackException, msgpack.exceptions.ExtraData):
             # If the session data was invalid we'll give the user a new session
             return Session()
 
@@ -279,11 +250,7 @@ class SessionFactory:
             self.redis.setex(
                 self._redis_key(request.session.sid),
                 self.max_age,
-                msgpack.packb(
-                    request.session,
-                    encoding="utf8",
-                    use_bin_type=True,
-                ),
+                msgpack.packb(request.session, encoding="utf8", use_bin_type=True),
             )
 
             # Send our session cookie to the client
@@ -293,28 +260,55 @@ class SessionFactory:
                 max_age=self.max_age,
                 httponly=True,
                 secure=request.scheme == "https",
+                samesite=b"lax",
             )
 
 
-def session_mapper_factory(mapper):
-    class SessionMapper(mapper):
+def session_view(view, info):
+    if info.options.get("uses_session"):
+        # If we're using the session, then we'll just return the original view
+        # with a small wrapper around it to ensure that it has a Vary: Cookie
+        # header.
+        return add_vary("Cookie")(view)
+    elif info.exception_only:
+        return view
+    else:
+        # If we're not using the session on this view, then we'll wrap the view
+        # with a wrapper that just ensures that the session cannot be used.
+        @functools.wraps(view)
+        def wrapped(context, request):
+            # This whole method is a little bit of an odd duck, we want to make
+            # sure that we don't actually *access* request.session, because
+            # doing so triggers the machinery to create a new session. So
+            # instead we will dig into the request object __dict__ to
+            # effectively do the same thing, jsut without triggering an access
+            # on request.session.
 
-        def __call__(self, view):
-            view = super().__call__(view)
+            # Save the original session so that we can restore it once the
+            # inner views have been called.
+            nothing = object()
+            original_session = request.__dict__.get("session", nothing)
 
-            @functools.wraps(view)
-            def wrapped(context, request):
-                # Check if we're allowing access to the session for this
-                # request. If we're not allowing it, then we'll replace it with
-                # an InvalidSession() which won't allow using the session.
-                if not getattr(request, "_allow_session", False):
-                    request.session = InvalidSession()
+            # This particular view hasn't been set to allow access to the
+            # session, so we'll just assign an InvalidSession to
+            # request.session
+            request.__dict__["session"] = InvalidSession()
 
-                # Actually invoke our underlying view.
+            try:
+                # Invoke the real view
                 return view(context, request)
+            finally:
+                # Restore the original session so that things like
+                # pyramid_debugtoolbar can access it.
+                if original_session is nothing:
+                    del request.__dict__["session"]
+                else:
+                    request.__dict__["session"] = original_session
 
-            return wrapped
-    return SessionMapper
+        return wrapped
+
+
+session_view.options = {"uses_session"}
 
 
 def includeme(config):
@@ -322,16 +316,7 @@ def includeme(config):
         SessionFactory(
             config.registry.settings["sessions.secret"],
             config.registry.settings["sessions.url"],
-        ),
+        )
     )
 
-    # We need to commit what's happened so far so that we can get the current
-    # default ViewMapper
-    config.commit()
-
-    # Get the current default ViewMapper, and create a subclass of it that
-    # will wrap our view with our session removal decorator.
-    mapper = config.registry.queryUtility(IViewMapperFactory)
-    if mapper is None:
-        mapper = DefaultViewMapper
-    config.set_view_mapper(session_mapper_factory(mapper))
+    config.add_view_deriver(session_view, over="csrf_view", under=viewderivers.INGRESS)

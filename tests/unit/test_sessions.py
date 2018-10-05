@@ -12,48 +12,26 @@
 
 import time
 
-from unittest import mock
-
 import msgpack
 import redis
 import pretend
 import pytest
 
-from pyramid.config.views import DefaultViewMapper
-from pyramid.interfaces import IViewMapperFactory
+from pyramid import viewderivers
 
 import warehouse.sessions
 
 from warehouse.sessions import (
-    InvalidSession, Session, SessionFactory, uses_session, includeme,
-    session_mapper_factory,
+    InvalidSession,
+    Session,
+    SessionFactory,
+    includeme,
+    session_view,
 )
 from warehouse.utils import crypto
 
 
-def test_uses_session(monkeypatch):
-    vary_wrapper = pretend.call_recorder(lambda fn: fn)
-    add_vary = pretend.call_recorder(lambda *varies: vary_wrapper)
-    monkeypatch.setattr(warehouse.sessions, "add_vary", add_vary)
-
-    @pretend.call_recorder
-    def view(context, request):
-        pass
-
-    context = pretend.stub()
-    request = pretend.stub()
-
-    wrapped = uses_session(view)
-    wrapped(context, request)
-
-    assert view.calls == [pretend.call(context, request)]
-    assert request._allow_session
-    assert add_vary.calls == [pretend.call("Cookie")]
-    assert vary_wrapper.calls == [pretend.call(mock.ANY)]
-
-
 class TestInvalidSession:
-
     @pytest.mark.parametrize(
         "method",
         [
@@ -75,7 +53,6 @@ class TestInvalidSession:
             "setdefault",
             "update",
             "values",
-
             # ISession methods
             "invalidate",
             "flash",
@@ -84,11 +61,8 @@ class TestInvalidSession:
             "peek_flash",
             "new_csrf_token",
             "pop_flash",
-
             # Our custom methods.
             "should_save",
-            "get_scoped_csrf_token",
-            "has_csrf_token",
         ],
     )
     def test_methods_raise(self, method):
@@ -104,14 +78,8 @@ class TestInvalidSession:
 
 
 class TestSession:
-
     @pytest.mark.parametrize(
-        ("data", "expected"),
-        [
-            (None, {}),
-            ({}, {}),
-            ({"foo": "bar"}, {"foo": "bar"}),
-        ]
+        ("data", "expected"), [(None, {}), ({}, {}), ({"foo": "bar"}, {"foo": "bar"})]
     )
     def test_create_new(self, monkeypatch, data, expected):
         monkeypatch.setattr(time, "time", lambda: 100)
@@ -133,7 +101,7 @@ class TestSession:
             (None, {}, False),
             ({}, {}, False),
             ({"foo": "bar"}, {"foo": "bar"}, False),
-        ]
+        ],
     )
     def test_create_with_session_id(self, monkeypatch, data, expected, new):
         monkeypatch.setattr(time, "time", lambda: 100)
@@ -207,10 +175,7 @@ class TestSession:
 
     @pytest.mark.parametrize(
         ("queue", "expected"),
-        [
-            (None, "_flash_messages"),
-            ("foobar", "_flash_messages.foobar"),
-        ],
+        [(None, "_flash_messages"), ("foobar", "_flash_messages.foobar")],
     )
     def test_generate_flash_key(self, queue, expected):
         session = Session()
@@ -269,12 +234,12 @@ class TestSession:
         monkeypatch.setattr(crypto, "random_token", lambda: next(tokens))
         session = Session()
 
-        assert not session.has_csrf_token()
+        assert session._csrf_token_key not in session
         assert session.new_csrf_token() == "123456"
-        assert session.has_csrf_token()
+        assert session._csrf_token_key in session
         assert session.get_csrf_token() == "123456"
         assert session.new_csrf_token() == "7890"
-        assert session.has_csrf_token()
+        assert session._csrf_token_key in session
         assert session.get_csrf_token() == "7890"
 
     def test_get_csrf_token_empty(self):
@@ -284,19 +249,8 @@ class TestSession:
         assert session.get_csrf_token() == "123456"
         assert session.new_csrf_token.calls == [pretend.call()]
 
-    def test_scoped_csrf_token(self):
-        session = Session(session_id="my session id")
-        session.get_csrf_token = pretend.call_recorder(lambda: "123456")
-
-        assert session.get_scoped_csrf_token("myscope") == (
-            "cdcecc5069f543c8fa99c5ebf0fff014e63b7f618ad789e167b5148c4a81b2d0"
-            "02c321a48c611ab34ef6d7f539d5196fa80b05f161586ee8d0eee31808cf3b38"
-        )
-        assert session.get_csrf_token.calls == [pretend.call()]
-
 
 class TestSessionFactory:
-
     def test_initialize(self, monkeypatch):
         timestamp_signer_obj = pretend.stub()
         timestamp_signer_create = pretend.call_recorder(
@@ -306,7 +260,7 @@ class TestSessionFactory:
 
         strict_redis_obj = pretend.stub()
         strict_redis_cls = pretend.stub(
-            from_url=pretend.call_recorder(lambda url: strict_redis_obj),
+            from_url=pretend.call_recorder(lambda url: strict_redis_obj)
         )
         monkeypatch.setattr(redis, "StrictRedis", strict_redis_cls)
 
@@ -315,27 +269,26 @@ class TestSessionFactory:
         assert session_factory.signer is timestamp_signer_obj
         assert session_factory.redis is strict_redis_obj
         assert timestamp_signer_create.calls == [
-            pretend.call("mysecret", salt="session"),
+            pretend.call("mysecret", salt="session")
         ]
         assert strict_redis_cls.from_url.calls == [pretend.call("my url")]
 
     def test_redis_key(self):
-        session_factory = SessionFactory(
-            "mysecret", "redis://redis://localhost:6379/0",
+        session_factory = SessionFactory("mysecret", "redis://redis://localhost:6379/0")
+        assert (
+            session_factory._redis_key("my_session_id")
+            == "warehouse/session/data/my_session_id"
         )
-        assert session_factory._redis_key("my_session_id") == \
-            "warehouse/session/data/my_session_id"
 
     def test_no_current_session(self, pyramid_request):
-        session_factory = SessionFactory(
-            "mysecret", "redis://redis://localhost:6379/0",
-        )
+        session_factory = SessionFactory("mysecret", "redis://redis://localhost:6379/0")
         session_factory._process_response = pretend.stub()
         session = session_factory(pyramid_request)
 
         assert len(pyramid_request.response_callbacks) == 1
-        assert pyramid_request.response_callbacks[0] is \
-            session_factory._process_response
+        assert (
+            pyramid_request.response_callbacks[0] is session_factory._process_response
+        )
 
         assert isinstance(session, Session)
         assert session._sid is None
@@ -344,15 +297,14 @@ class TestSessionFactory:
     def test_invalid_session_id(self, pyramid_request):
         pyramid_request.cookies["session_id"] = "invalid!"
 
-        session_factory = SessionFactory(
-            "mysecret", "redis://redis://localhost:6379/0",
-        )
+        session_factory = SessionFactory("mysecret", "redis://redis://localhost:6379/0")
         session_factory._process_response = pretend.stub()
         session = session_factory(pyramid_request)
 
         assert len(pyramid_request.response_callbacks) == 1
-        assert pyramid_request.response_callbacks[0] is \
-            session_factory._process_response
+        assert (
+            pyramid_request.response_callbacks[0] is session_factory._process_response
+        )
 
         assert isinstance(session, Session)
         assert session._sid is None
@@ -361,28 +313,27 @@ class TestSessionFactory:
     def test_valid_session_id_no_data(self, pyramid_request):
         pyramid_request.cookies["session_id"] = "123456"
 
-        session_factory = SessionFactory(
-            "mysecret", "redis://redis://localhost:6379/0",
-        )
+        session_factory = SessionFactory("mysecret", "redis://redis://localhost:6379/0")
         session_factory.signer.unsign = pretend.call_recorder(
             lambda session_id, max_age: b"123456"
         )
         session_factory.redis = pretend.stub(
-            get=pretend.call_recorder(lambda key: None),
+            get=pretend.call_recorder(lambda key: None)
         )
         session_factory._process_response = pretend.stub()
         session = session_factory(pyramid_request)
 
         assert len(pyramid_request.response_callbacks) == 1
-        assert pyramid_request.response_callbacks[0] is \
-            session_factory._process_response
+        assert (
+            pyramid_request.response_callbacks[0] is session_factory._process_response
+        )
 
         assert session_factory.signer.unsign.calls == [
-            pretend.call("123456", max_age=12 * 60 * 60),
+            pretend.call("123456", max_age=12 * 60 * 60)
         ]
 
         assert session_factory.redis.get.calls == [
-            pretend.call("warehouse/session/data/123456"),
+            pretend.call("warehouse/session/data/123456")
         ]
 
         assert isinstance(session, Session)
@@ -392,28 +343,27 @@ class TestSessionFactory:
     def test_valid_session_id_invalid_data(self, pyramid_request):
         pyramid_request.cookies["session_id"] = "123456"
 
-        session_factory = SessionFactory(
-            "mysecret", "redis://redis://localhost:6379/0",
-        )
+        session_factory = SessionFactory("mysecret", "redis://redis://localhost:6379/0")
         session_factory.signer.unsign = pretend.call_recorder(
             lambda session_id, max_age: b"123456"
         )
         session_factory.redis = pretend.stub(
-            get=pretend.call_recorder(lambda key: b"invalid data"),
+            get=pretend.call_recorder(lambda key: b"invalid data")
         )
         session_factory._process_response = pretend.stub()
         session = session_factory(pyramid_request)
 
         assert len(pyramid_request.response_callbacks) == 1
-        assert pyramid_request.response_callbacks[0] is \
-            session_factory._process_response
+        assert (
+            pyramid_request.response_callbacks[0] is session_factory._process_response
+        )
 
         assert session_factory.signer.unsign.calls == [
-            pretend.call("123456", max_age=12 * 60 * 60),
+            pretend.call("123456", max_age=12 * 60 * 60)
         ]
 
         assert session_factory.redis.get.calls == [
-            pretend.call("warehouse/session/data/123456"),
+            pretend.call("warehouse/session/data/123456")
         ]
 
         assert isinstance(session, Session)
@@ -428,32 +378,31 @@ class TestSessionFactory:
 
         pyramid_request.cookies["session_id"] = "123456"
 
-        session_factory = SessionFactory(
-            "mysecret", "redis://redis://localhost:6379/0",
-        )
+        session_factory = SessionFactory("mysecret", "redis://redis://localhost:6379/0")
         session_factory.signer.unsign = pretend.call_recorder(
             lambda session_id, max_age: b"123456"
         )
         session_factory.redis = pretend.stub(
-            get=pretend.call_recorder(lambda key: b"valid data"),
+            get=pretend.call_recorder(lambda key: b"valid data")
         )
         session_factory._process_response = pretend.stub()
         session = session_factory(pyramid_request)
 
         assert len(pyramid_request.response_callbacks) == 1
-        assert pyramid_request.response_callbacks[0] is \
-            session_factory._process_response
+        assert (
+            pyramid_request.response_callbacks[0] is session_factory._process_response
+        )
 
         assert session_factory.signer.unsign.calls == [
-            pretend.call("123456", max_age=12 * 60 * 60),
+            pretend.call("123456", max_age=12 * 60 * 60)
         ]
 
         assert session_factory.redis.get.calls == [
-            pretend.call("warehouse/session/data/123456"),
+            pretend.call("warehouse/session/data/123456")
         ]
 
         assert msgpack_unpackb.calls == [
-            pretend.call(b"valid data", encoding="utf8", use_list=True),
+            pretend.call(b"valid data", encoding="utf8", use_list=True)
         ]
 
         assert isinstance(session, Session)
@@ -462,40 +411,30 @@ class TestSessionFactory:
         assert not session.new
 
     def test_no_save_invalid_session(self, pyramid_request):
-        session_factory = SessionFactory(
-            "mysecret", "redis://redis://localhost:6379/0",
-        )
+        session_factory = SessionFactory("mysecret", "redis://redis://localhost:6379/0")
         session_factory.redis = pretend.stub()
         pyramid_request.session = InvalidSession()
         response = pretend.stub()
         session_factory._process_response(pyramid_request, response)
 
     def test_noop_unused_session(self, pyramid_request):
-        session_factory = SessionFactory(
-            "mysecret", "redis://redis://localhost:6379/0",
-        )
+        session_factory = SessionFactory("mysecret", "redis://redis://localhost:6379/0")
         session_factory.redis = pretend.stub()
         pyramid_request.session.invalidated = set()
-        pyramid_request.session.should_save = pretend.call_recorder(
-            lambda: False
-        )
+        pyramid_request.session.should_save = pretend.call_recorder(lambda: False)
         response = pretend.stub()
         session_factory._process_response(pyramid_request, response)
         assert pyramid_request.session.should_save.calls == [pretend.call()]
 
     def test_invalidated_deletes_no_save(self, pyramid_request):
-        session_factory = SessionFactory(
-            "mysecret", "redis://redis://localhost:6379/0",
-        )
+        session_factory = SessionFactory("mysecret", "redis://redis://localhost:6379/0")
         session_factory.redis = pretend.stub(
             delete=pretend.call_recorder(lambda key: None)
         )
         pyramid_request.session.invalidated = ["1", "2"]
-        pyramid_request.session.should_save = pretend.call_recorder(
-            lambda: False
-        )
+        pyramid_request.session.should_save = pretend.call_recorder(lambda: False)
         response = pretend.stub(
-            delete_cookie=pretend.call_recorder(lambda cookie: None),
+            delete_cookie=pretend.call_recorder(lambda cookie: None)
         )
         session_factory._process_response(pyramid_request, response)
 
@@ -509,32 +448,25 @@ class TestSessionFactory:
         ]
         assert response.delete_cookie.calls == [pretend.call("session_id")]
 
-    def test_invalidated_deletes_save_non_secure(self, monkeypatch,
-                                                 pyramid_request):
+    def test_invalidated_deletes_save_non_secure(self, monkeypatch, pyramid_request):
         msgpack_packb = pretend.call_recorder(
             lambda data, encoding, use_bin_type: b"msgpack data"
         )
         monkeypatch.setattr(msgpack, "packb", msgpack_packb)
 
-        session_factory = SessionFactory(
-            "mysecret", "redis://redis://localhost:6379/0",
-        )
+        session_factory = SessionFactory("mysecret", "redis://redis://localhost:6379/0")
         session_factory.redis = pretend.stub(
             delete=pretend.call_recorder(lambda key: None),
             setex=pretend.call_recorder(lambda key, age, data: None),
         )
-        session_factory.signer.sign = pretend.call_recorder(
-            lambda data: "cookie data"
-        )
+        session_factory.signer.sign = pretend.call_recorder(lambda data: "cookie data")
         pyramid_request.scheme = "http"
         pyramid_request.session.sid = "123456"
         pyramid_request.session.invalidated = ["1", "2"]
-        pyramid_request.session.should_save = pretend.call_recorder(
-            lambda: True
-        )
+        pyramid_request.session.should_save = pretend.call_recorder(lambda: True)
         response = pretend.stub(
             set_cookie=pretend.call_recorder(
-                lambda cookie, data, max_age, httponly, secure: None
+                lambda cookie, data, max_age, httponly, secure, samesite: None
             )
         )
         session_factory._process_response(pyramid_request, response)
@@ -544,18 +476,10 @@ class TestSessionFactory:
             pretend.call("warehouse/session/data/2"),
         ]
         assert msgpack_packb.calls == [
-            pretend.call(
-                pyramid_request.session,
-                encoding="utf8",
-                use_bin_type=True,
-            ),
+            pretend.call(pyramid_request.session, encoding="utf8", use_bin_type=True)
         ]
         assert session_factory.redis.setex.calls == [
-            pretend.call(
-                "warehouse/session/data/123456",
-                12 * 60 * 60,
-                b"msgpack data",
-            ),
+            pretend.call("warehouse/session/data/123456", 12 * 60 * 60, b"msgpack data")
         ]
         assert pyramid_request.session.should_save.calls == [
             pretend.call(),
@@ -569,107 +493,74 @@ class TestSessionFactory:
                 max_age=12 * 60 * 60,
                 httponly=True,
                 secure=False,
-            ),
+                samesite=b"lax",
+            )
         ]
 
 
-class TestSessionMapperFactory:
+class TestSessionView:
+    def test_has_options(self):
+        assert set(session_view.options) == {"uses_session"}
 
-    def test_non_session_view(self, monkeypatch):
-        class FakeMapper:
-            def __call__(self, view):
-                return view
+    @pytest.mark.parametrize("uses_session", [False, None])
+    def test_invalid_session(self, uses_session):
+        context = pretend.stub()
+        request = pretend.stub(session=pretend.stub())
+        response = pretend.stub()
 
-        mapper = session_mapper_factory(FakeMapper)()
+        @pretend.call_recorder
+        def view(context, request):
+            assert isinstance(request.session, InvalidSession)
+            return response
+
+        info = pretend.stub(options={}, exception_only=False)
+        if uses_session is not None:
+            info.options["uses_session"] = uses_session
+        derived_view = session_view(view, info)
+
+        assert derived_view(context, request) is response
+        assert view.calls == [pretend.call(context, request)]
+
+    def test_valid_session(self, monkeypatch):
+        add_vary_cb = pretend.call_recorder(lambda fn: fn)
+        add_vary = pretend.call_recorder(lambda vary: add_vary_cb)
+        monkeypatch.setattr(warehouse.sessions, "add_vary", add_vary)
 
         context = pretend.stub()
         request = pretend.stub(session=Session())
-
-        session = request.session
-
-        @pretend.call_recorder
-        def view(context, request):
-            assert request.session is not session
-            assert isinstance(request.session, InvalidSession)
-
-        wrapped = mapper(view)
-        wrapped(context, request)
-
-        assert view.calls == [pretend.call(context, request)]
-        assert isinstance(request.session, InvalidSession)
-
-    def test_session_view(self, monkeypatch, pyramid_request):
-        class FakeMapper:
-            def __call__(self, view):
-                return view
-
-        mapper = session_mapper_factory(FakeMapper)()
-
-        context = pretend.stub()
-        request = pyramid_request
-        request._allow_session = True
-
-        session = request.session
+        response = pretend.stub()
 
         @pretend.call_recorder
         def view(context, request):
-            assert request.session is session
+            assert isinstance(request.session, Session)
+            return response
 
-        wrapped = mapper(view)
-        wrapped(context, request)
+        info = pretend.stub(options={"uses_session": True})
+        derived_view = session_view(view, info)
 
+        assert derived_view(context, request) is response
         assert view.calls == [pretend.call(context, request)]
-        assert request.session is session
+        assert add_vary.calls == [pretend.call("Cookie")]
+        assert add_vary_cb.calls == [pretend.call(view)]
 
 
-@pytest.mark.parametrize("mapper", [None, True])
-def test_includeme(monkeypatch, mapper):
+def test_includeme(monkeypatch):
     session_factory_obj = pretend.stub()
-    session_factory_cls = pretend.call_recorder(
-        lambda secret, url: session_factory_obj
-    )
-    monkeypatch.setattr(
-        warehouse.sessions,
-        "SessionFactory",
-        session_factory_cls,
-    )
-
-    if mapper:
-        class Mapper:
-            pass
-
-        mapper = Mapper
-
-    mapper_cls = pretend.stub()
-    session_mapper_factory = pretend.call_recorder(lambda m: mapper_cls)
-    monkeypatch.setattr(
-        warehouse.sessions, "session_mapper_factory", session_mapper_factory,
-    )
+    session_factory_cls = pretend.call_recorder(lambda secret, url: session_factory_obj)
+    monkeypatch.setattr(warehouse.sessions, "SessionFactory", session_factory_cls)
 
     config = pretend.stub(
-        commit=pretend.call_recorder(lambda: None),
         set_session_factory=pretend.call_recorder(lambda factory: None),
         registry=pretend.stub(
-            queryUtility=pretend.call_recorder(lambda iface: mapper),
-            settings={
-                "sessions.secret": "my secret",
-                "sessions.url": "my url",
-            },
+            settings={"sessions.secret": "my secret", "sessions.url": "my url"}
         ),
-        set_view_mapper=pretend.call_recorder(lambda m: None)
+        add_view_deriver=pretend.call_recorder(lambda *a, **kw: None),
     )
 
     includeme(config)
 
-    assert config.set_session_factory.calls == [
-        pretend.call(session_factory_obj),
-    ]
+    assert config.set_session_factory.calls == [pretend.call(session_factory_obj)]
     assert session_factory_cls.calls == [pretend.call("my secret", "my url")]
-    assert config.commit.calls == [pretend.call()]
-    assert config.registry.queryUtility.calls == [
-        pretend.call(IViewMapperFactory),
+    assert config.add_view_deriver.calls == [
+        pretend.call(session_view, over="csrf_view", under=viewderivers.INGRESS)
     ]
-    assert session_mapper_factory.calls == [
-        pretend.call(mapper if mapper is not None else DefaultViewMapper),
-    ]
-    assert config.set_view_mapper.calls == [pretend.call(mapper_cls)]

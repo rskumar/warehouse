@@ -13,12 +13,13 @@
 import alembic.command
 import click
 
-from warehouse.cli.db import db
+from warehouse.cli.db import db, alembic_lock
 
 
 @db.command()
 @click.option(
-    "--resolve-dependencies", "-r",
+    "--resolve-dependencies",
+    "-r",
     is_flag=True,
     help="Treat dependency versions as down revisions",
 )
@@ -27,4 +28,7 @@ def heads(config, **kwargs):
     """
     Show current available heads.
     """
-    alembic.command.heads(config.alembic_config(), **kwargs)
+    with alembic_lock(
+        config.registry["sqlalchemy.engine"], config.alembic_config()
+    ) as alembic_config:
+        alembic.command.heads(alembic_config, **kwargs)

@@ -5,16 +5,28 @@
 *.egg
 .eggs/
 
-.tox/
 .cache/
 .coverage
+.state
+.idea
 
 docs/_build/
 build/
-dist/
+dist/*.tar.gz
+dist/*.whl
 htmlcov/
 
 node_modules/
 
 dev/example.sql
-data/
+dev/prod.sql
+dev/prod.sql.xz
+./data/
+
+warehouse/.commit
+warehouse/static/components
+warehouse/static/dist
+warehouse/admin/static/dist
+
+tags
+*.sw*

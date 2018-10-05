@@ -10,124 +10,79 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import jinja2
+import urllib.parse
+
+from functools import partial
+
+import packaging.version
 import pretend
 import pytest
-import readme.rst
 
 from warehouse import filters
 
 
 def test_camo_url():
-    c_url = filters._camo_url(
-        "https://camo.example.net/",
-        "fake key",
-        "http://example.com/image.jpg",
+    request = pretend.stub(
+        registry=pretend.stub(
+            settings={"camo.url": "https://camo.example.net/", "camo.key": "fake key"}
+        )
     )
+    c_url = filters._camo_url(request, "http://example.com/image.jpg")
     assert c_url == (
         "https://camo.example.net/b410d235a3d2fc44b50ccab827e531dece213062/"
         "687474703a2f2f6578616d706c652e636f6d2f696d6167652e6a7067"
     )
 
 
-class TestReadmeRender:
-
-    def test_can_render(self, monkeypatch):
-        monkeypatch.setattr(
-            readme.rst, "render", lambda raw: ("rendered", True)
-        )
-
-        ctx = {
-            "request": pretend.stub(
-                registry=pretend.stub(
-                    settings={
-                        "camo.url": "https://camo.example.net/",
-                        "camo.key": "fake key",
-                    },
-                ),
-            ),
-        }
-
-        result = filters.readme_renderer(ctx, "raw thing", format="rst")
-
-        assert result == jinja2.Markup("rendered")
-
-    def test_cant_render(self, monkeypatch):
-        monkeypatch.setattr(
-            readme.rst, "render", lambda raw: ("unrendered\nthing", False)
-        )
-
-        ctx = {
-            "request": pretend.stub(
-                registry=pretend.stub(
-                    settings={
-                        "camo.url": "https://camo.example.net/",
-                        "camo.key": "fake key",
-                    },
-                ),
-            ),
-        }
-
-        result = filters.readme_renderer(ctx, "raw thing", format="rst")
-
-        assert result == jinja2.Markup("unrendered<br>\nthing")
-
-    def test_renders_camo(self, monkeypatch):
+class TestCamoify:
+    def test_camoify(self):
         html = "<img src=http://example.com/image.jpg>"
-        monkeypatch.setattr(readme.rst, "render", lambda raw: (html, True))
 
-        gen_camo_url = pretend.call_recorder(
-            lambda curl, ckey, url: "https://camo.example.net/image.jpg"
+        request = pretend.stub(
+            registry=pretend.stub(
+                settings={
+                    "camo.url": "https://camo.example.net/",
+                    "camo.key": "fake key",
+                }
+            )
         )
-        monkeypatch.setattr(filters, "_camo_url", gen_camo_url)
+        camo_url = partial(filters._camo_url, request)
+        request.camo_url = camo_url
 
-        ctx = {
-            "request": pretend.stub(
-                registry=pretend.stub(
-                    settings={
-                        "camo.url": "https://camo.example.net/",
-                        "camo.key": "fake key",
-                    },
-                ),
-            ),
-        }
+        ctx = {"request": request}
 
-        result = filters.readme_renderer(ctx, "raw thing", format="rst")
+        result = filters.camoify(ctx, html)
 
-        assert result == jinja2.Markup(
-            "<img src=https://camo.example.net/image.jpg>"
+        assert result == (
+            '<img src="https://camo.example.net/'
+            "b410d235a3d2fc44b50ccab827e531dece213062/"
+            '687474703a2f2f6578616d706c652e636f6d2f696d6167652e6a7067">'
         )
-        assert gen_camo_url.calls == [
-            pretend.call(
-                "https://camo.example.net/",
-                "fake key",
-                "http://example.com/image.jpg",
-            ),
-        ]
 
-    def test_renders_camo_no_src(self, monkeypatch):
+    def test_camoify_no_src(self, monkeypatch):
         html = "<img>"
-        monkeypatch.setattr(readme.rst, "render", lambda raw: (html, True))
+
+        request = pretend.stub(
+            registry=pretend.stub(
+                settings={
+                    "camo.url": "https://camo.example.net/",
+                    "camo.key": "fake key",
+                }
+            )
+        )
+        camo_url = partial(filters._camo_url, request)
+        request.camo_url = camo_url
+
+        ctx = {"request": request}
 
         gen_camo_url = pretend.call_recorder(
             lambda curl, ckey, url: "https://camo.example.net/image.jpg"
         )
         monkeypatch.setattr(filters, "_camo_url", gen_camo_url)
 
-        ctx = {
-            "request": pretend.stub(
-                registry=pretend.stub(
-                    settings={
-                        "camo.url": "https://camo.example.net/",
-                        "camo.key": "fake key",
-                    },
-                ),
-            ),
-        }
+        result = filters.camoify(ctx, html)
 
-        result = filters.readme_renderer(ctx, "raw thing", format="rst")
-
-        assert result == jinja2.Markup("<img>")
+        assert result == "<img>"
         assert gen_camo_url.calls == []
 
 
@@ -144,3 +99,90 @@ class TestReadmeRender:
 )
 def test_shorten_number(inp, expected):
     assert filters.shorten_number(inp) == expected
+
+
+@pytest.mark.parametrize(
+    ("inp", "expected"),
+    [({"foo": "bar", "left": "right"}, '{"foo":"bar","left":"right"}')],
+)
+def test_tojson(inp, expected):
+    assert filters.tojson(inp) == expected
+
+
+def test_urlparse():
+    inp = "https://google.com/foo/bar?a=b"
+    expected = urllib.parse.urlparse(inp)
+    assert filters.urlparse(inp) == expected
+
+
+@pytest.mark.parametrize(
+    ("inp", "expected"),
+    [
+        (
+            "'python', finance, \"data\",        code    , test automation",
+            ["python", "finance", "data", "code", "test automation"],
+        ),
+        (
+            "'python'; finance; \"data\";        code    ; test automation",
+            ["python", "finance", "data", "code", "test automation"],
+        ),
+        ("a \"b\" c   d  'e'", ["a", "b", "c", "d", "e"]),
+        ("      '    '   \"  \"", []),
+    ],
+)
+def test_format_tags(inp, expected):
+    assert filters.format_tags(inp) == expected
+
+
+@pytest.mark.parametrize(
+    ("inp", "expected"),
+    [
+        (
+            ["Foo :: Bar :: Baz", "Foo :: Bar :: Qux", "Vleep"],
+            [("Foo", ["Bar :: Baz", "Bar :: Qux"])],
+        ),
+        (
+            ["Vleep :: Foo", "Foo :: Bar :: Qux", "Foo :: Bar :: Baz"],
+            [("Foo", ["Bar :: Baz", "Bar :: Qux"]), ("Vleep", ["Foo"])],
+        ),
+    ],
+)
+def test_format_classifiers(inp, expected):
+    assert list(filters.format_classifiers(inp).items()) == expected
+
+
+@pytest.mark.parametrize(
+    ("inp", "expected"),
+    [
+        (["abcdef", "ghijkl"], False),
+        (["https://github.com/example/test", "https://pypi.io/"], True),
+        (["abcdef", "https://github.com/example/test"], True),
+    ],
+)
+def test_contains_valid_uris(inp, expected):
+    assert filters.contains_valid_uris(inp) == expected
+
+
+@pytest.mark.parametrize(
+    ("inp", "expected"),
+    [
+        ("bdist_dmg", "OSX Disk Image"),
+        ("bdist_dumb", "Dumb Binary"),
+        ("bdist_egg", "Egg"),
+        ("bdist_msi", "Windows MSI Installer"),
+        ("bdist_rpm", "RPM"),
+        ("bdist_wheel", "Wheel"),
+        ("bdist_wininst", "Windows Installer"),
+        ("sdist", "Source"),
+        ("invalid", "invalid"),
+    ],
+)
+def test_format_package_type(inp, expected):
+    assert filters.format_package_type(inp) == expected
+
+
+@pytest.mark.parametrize(
+    ("inp", "expected"), [("1.0", packaging.version.Version("1.0"))]
+)
+def test_parse_version(inp, expected):
+    assert filters.parse_version(inp) == expected

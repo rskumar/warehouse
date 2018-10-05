@@ -11,7 +11,9 @@
 # limitations under the License.
 
 import pretend
+import uuid
 
+from pyramid import authentication
 from pyramid.interfaces import IAuthenticationPolicy
 from zope.interface.verify import verifyClass
 
@@ -20,68 +22,71 @@ from warehouse.accounts.interfaces import IUserService
 
 
 class TestBasicAuthAuthenticationPolicy:
-
     def test_verify(self):
         assert verifyClass(
-            IAuthenticationPolicy,
-            auth_policy.BasicAuthAuthenticationPolicy,
+            IAuthenticationPolicy, auth_policy.BasicAuthAuthenticationPolicy
         )
 
     def test_unauthenticated_userid_no_userid(self, monkeypatch):
-        policy = auth_policy.BasicAuthAuthenticationPolicy(
-            check=pretend.stub(),
+        extract_http_basic_credentials = pretend.call_recorder(lambda request: None)
+        monkeypatch.setattr(
+            authentication,
+            "extract_http_basic_credentials",
+            extract_http_basic_credentials,
         )
-        policy._get_credentials = pretend.call_recorder(lambda request: None)
+
+        policy = auth_policy.BasicAuthAuthenticationPolicy(check=pretend.stub())
 
         vary_cb = pretend.stub()
         add_vary_cb = pretend.call_recorder(lambda *v: vary_cb)
-        monkeypatch.setattr(auth_policy, "_add_vary_callback", add_vary_cb)
+        monkeypatch.setattr(auth_policy, "add_vary_callback", add_vary_cb)
 
         request = pretend.stub(
-            add_response_callback=pretend.call_recorder(lambda cb: None),
+            add_response_callback=pretend.call_recorder(lambda cb: None)
         )
 
         assert policy.unauthenticated_userid(request) is None
-        assert policy._get_credentials.calls == [pretend.call(request)]
+        assert extract_http_basic_credentials.calls == [pretend.call(request)]
         assert add_vary_cb.calls == [pretend.call("Authorization")]
         assert request.add_response_callback.calls == [pretend.call(vary_cb)]
 
     def test_unauthenticated_userid_with_userid(self, monkeypatch):
-        policy = auth_policy.BasicAuthAuthenticationPolicy(
-            check=pretend.stub(),
+        extract_http_basic_credentials = pretend.call_recorder(
+            lambda request: authentication.HTTPBasicCredentials("username", "password")
         )
-        policy._get_credentials = pretend.call_recorder(
-            lambda request: ("username", "password")
+        monkeypatch.setattr(
+            authentication,
+            "extract_http_basic_credentials",
+            extract_http_basic_credentials,
         )
+
+        policy = auth_policy.BasicAuthAuthenticationPolicy(check=pretend.stub())
 
         vary_cb = pretend.stub()
         add_vary_cb = pretend.call_recorder(lambda *v: vary_cb)
-        monkeypatch.setattr(auth_policy, "_add_vary_callback", add_vary_cb)
+        monkeypatch.setattr(auth_policy, "add_vary_callback", add_vary_cb)
 
-        userid = pretend.stub()
+        userid = uuid.uuid4()
         service = pretend.stub(
-            find_userid=pretend.call_recorder(lambda username: userid),
+            find_userid=pretend.call_recorder(lambda username: userid)
         )
         request = pretend.stub(
             find_service=pretend.call_recorder(lambda iface, context: service),
             add_response_callback=pretend.call_recorder(lambda cb: None),
         )
 
-        assert policy.unauthenticated_userid(request) is userid
-        assert request.find_service.calls == [
-            pretend.call(IUserService, context=None),
-        ]
+        assert policy.unauthenticated_userid(request) == str(userid)
+        assert extract_http_basic_credentials.calls == [pretend.call(request)]
+        assert request.find_service.calls == [pretend.call(IUserService, context=None)]
         assert service.find_userid.calls == [pretend.call("username")]
         assert add_vary_cb.calls == [pretend.call("Authorization")]
         assert request.add_response_callback.calls == [pretend.call(vary_cb)]
 
 
 class TestSessionAuthenticationPolicy:
-
     def test_verify(self):
         assert verifyClass(
-            IAuthenticationPolicy,
-            auth_policy.SessionAuthenticationPolicy,
+            IAuthenticationPolicy, auth_policy.SessionAuthenticationPolicy
         )
 
     def test_unauthenticated_userid(self, monkeypatch):
@@ -89,7 +94,7 @@ class TestSessionAuthenticationPolicy:
 
         vary_cb = pretend.stub()
         add_vary_cb = pretend.call_recorder(lambda *v: vary_cb)
-        monkeypatch.setattr(auth_policy, "_add_vary_callback", add_vary_cb)
+        monkeypatch.setattr(auth_policy, "add_vary_callback", add_vary_cb)
 
         userid = pretend.stub()
         request = pretend.stub(

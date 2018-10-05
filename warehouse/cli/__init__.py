@@ -30,24 +30,15 @@ class LazyConfig:
     def __getattr__(self, name):
         if self.__config is None:
             from warehouse.config import configure
+
             self.__config = configure(*self.__args, **self.__kwargs)
         return getattr(self.__config, name)
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
-@click.option(
-    "--config", "-c",
-    multiple=True,
-    type=click.Path(resolve_path=True),
-)
 @click.pass_context
-def warehouse(ctx, config):
-    settings = {}
-
-    if config:
-        settings["yml.location"] = config
-
-    ctx.obj = LazyConfig(settings=settings)
+def warehouse(ctx):
+    ctx.obj = LazyConfig()
 
 
 # We want to automatically import all of the warehouse.cli.* modules so that

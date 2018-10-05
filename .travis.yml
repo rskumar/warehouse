@@ -1,23 +1,69 @@
 language: python
-python: 3.4
+python: 3.6.6
 
-sudo: false
+env:
+  global:
+    - TRAVIS_NODE_VERSION=8.9.4
+    - PGPORT=5433
+
+dist: trusty
+sudo: true
+
+addons:
+  hosts:
+    - warehouse.local
+  postgresql: 10
+  apt:
+    packages:
+    - postgresql-10
+    - postgresql-client-10
+    - nasm
+
+services:
+  - postgresql
 
 cache:
   directories:
     - ~/.cache/pip
+    - node_modules/
 
-env:
-  - TOXENV=py34 TOXARGS="-- --dbfixtures-config .travis/dbfixtures.conf"
-  - TOXENV=cover TOXARGS="-- --dbfixtures-config .travis/dbfixtures.conf"
-  - TOXENV=pep8
-  - TOXENV=docs
-  - TOXENV=packaging
-  - TOXENV=translations
+install:
+  - 'rm -rf ~/.nvm && git clone https://github.com/creationix/nvm.git ~/.nvm && (cd ~/.nvm && git checkout `git describe --abbrev=0 --tags`) && source ~/.nvm/nvm.sh && nvm install $TRAVIS_NODE_VERSION'
+  - pip install -U pip setuptools wheel
+  - pip install -r requirements/main.txt -r requirements/deploy.txt -r requirements/docs.txt -r requirements/lint.txt -r requirements/tests.txt
+  - npm install
+  - sudo cp /etc/postgresql/{9.6,10}/main/pg_hba.conf
+  - sudo service postgresql restart
 
-install: pip install -U pip wheel tox
+script:
+  - node -v
+  - npm -v
+  - ./node_modules/.bin/gulp dist
+  - bin/tests --postgresql-host 127.0.0.1
 
-script: tox $TOXARGS
+matrix:
+  include:
+    - env:
+      - SUITE=Tests
+    - script: make lint BINDIR="$(dirname $(which python))"
+      env:
+        - SUITE=Lint
+    - script: make docs BINDIR="$(dirname $(which python))"
+      env:
+        - SUITE=Documentation
+    - script: make travis-deps BINDIR="$(dirname $(which python))"
+      env:
+        - SUITE=Dependencies
+    - script: make licenses BINDIR="$(dirname $(which python))"
+      env:
+        - SUITE=Licenses
+
+after_success:
+  - bash <(curl -s https://codecov.io/bash)
+
+branches:
+  only:
+    - master
 
 notifications:
   irc:

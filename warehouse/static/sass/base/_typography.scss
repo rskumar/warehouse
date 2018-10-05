@@ -1,10 +1,77 @@
+/*!
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// HIGH LEVEL
+
+html {
+  font-size: 100%;
+
+  @media screen and (max-width: $tablet) {
+    font-size: 95%;
+  }
+}
+
 body {
-  @include font-feature-settings("kern", "liga", "pnum");
-  -webkit-font-smoothing: antialiased;
-  color: $base-font-color;
   font-family: $base-font-family;
   font-size: $base-font-size;
   line-height: $base-line-height;
+  font-weight: $base-font-weight;
+  color: $text-color;
+  -webkit-text-size-adjust: 100%;
+  background-color: $background-color;
+}
+
+
+// CODE
+
+code,
+kbd,
+pre,
+samp,
+tt {
+  font-family: $code-font;
+  background-color: lighten($base-grey, 5);
+  border: 1px solid $border-color;
+  padding: 0 2px 1px 2px;
+  font-size: 85%;
+  color: lighten($text-color, 15);
+}
+
+// HEADINGS
+
+h1 {
+  @include h1;
+}
+
+h2 {
+  @include h2;
+}
+
+h3 {
+  @include h3;
+}
+
+h4 {
+  @include h4;
+}
+
+h5 {
+  @include h5;
+}
+
+h6 {
+  @include h6;
 }
 
 h1,
@@ -13,43 +80,84 @@ h3,
 h4,
 h5,
 h6 {
-  font-family: $heading-font-family;
-  font-size: $base-font-size;
-  line-height: $heading-line-height;
-  margin: 0 0 $small-spacing;
+  padding-top: $spacing-unit;
 }
 
-p {
-  margin: 0 0 $small-spacing;
+h1:first-child,
+h2:first-child,
+h3:first-child,
+h4:first-child,
+h5:first-child,
+h6:first-child,
+hr + h1,
+hr + h2,
+hr + h3,
+hr + h4,
+hr + h5,
+hr + h6 {
+  padding-top: 0;
+}
+
+
+// TYPE
+
+strong {
+  font-weight: $bold-font-weight;
 }
 
 a {
-  color: $action-color;
+  color: $primary-color;
   text-decoration: none;
-  transition: color 0.1s linear;
 
-  &:active,
-  &:focus,
   &:hover {
-    color: darken($action-color, 15%);
+    color: darken($primary-color, 10);
+    text-decoration: underline;
   }
 
-  &:active,
-  &:focus {
-    outline: none;
-  }
+  @include link-focus(underline);
+}
+
+button {
+  @include link-focus;
+}
+
+@include selection {
+  color: darken($primary-color, 15);
+  background: $highlight-color;
+}
+
+// VERTICAL RHYTHM
+
+// Set `padding-bottom` to maintain vertical rhythm
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+blockquote,
+pre,
+ul,
+ol,
+dl,
+figure {
+  padding-bottom: $spacing-unit / 2;
+}
+
+p:last-child,
+pre:last-child,
+ul:last-child,
+ol:last-child,
+dl:last-child,
+figure:last-child {
+  padding-bottom: 0;
 }
 
 hr {
-  border-bottom: $base-border;
-  border-left: none;
-  border-right: none;
-  border-top: none;
-  margin: $base-spacing 0;
-}
-
-img,
-picture {
-  margin: 0;
-  max-width: 100%;
+  margin: ($spacing-unit * 1.5) 0;
+  border: 0;
+  height: 2px;
+  background: $border-color;
+  background-image: linear-gradient(to right, $border-color, $white);
 }
